@@ -1,9 +1,9 @@
 class CubiomesViewer < Formula
-  desc "An efficient graphical Minecraft seed finder and map viewer."
+  desc "Efficient graphical Minecraft seed finder and map viewer"
   homepage "https://github.com/Cubitect/cubiomes-viewer"
   url "https://github.com/Cubitect/cubiomes-viewer/releases/download/4.1.2/cubiomes-viewer-4.1.2-src.tar.gz"
   sha256 "fa8aa328b4bfbdd5df9474cc9bd13a121d4c93f5f45f2fd40a79a53d9ab42255"
-  license "GPL-3.0"
+  license "GPL-3.0-or-later"
 
   depends_on "qt@5"
 
