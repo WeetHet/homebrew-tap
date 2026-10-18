@@ -1,0 +1,616 @@
+From: WeetHet <stas.ale66@gmail.com>
+Subject: [PATCH 3/3] index: ignore non-UTF-8 Git paths in changed-path index
+
+Rebased onto Jujutsu v0.46.0: the git backend lookup uses try_find_object and
+the existing not-found helper, and the diff callback returns gix::ExnResult.
+
+---
+ lib/src/default_index/changed_path.rs | 230 ++++++++++++++++++++++++++++------
+ lib/src/default_index/mutable.rs      |  18 ++-
+ lib/src/default_index/store.rs        |   6 +-
+ lib/src/git_backend.rs                |  59 +++++++++
+ lib/tests/test_index.rs               |  64 ++++++++++
+ 5 files changed, 335 insertions(+), 42 deletions(-)
+
+diff --git a/lib/src/default_index/changed_path.rs b/lib/src/default_index/changed_path.rs
+index 9b6a8cb..4a7a396 100644
+--- a/lib/src/default_index/changed_path.rs
++++ b/lib/src/default_index/changed_path.rs
+@@ -33,11 +33,13 @@ use tempfile::NamedTempFile;
+ 
+ use super::entry::GlobalCommitPosition;
+ use super::readonly::ReadonlyIndexLoadError;
++use crate::backend::BackendError;
+ use crate::backend::BackendResult;
+ use crate::commit::Commit;
+ use crate::file_util::IoResultExt as _;
+ use crate::file_util::PathError;
+ use crate::file_util::persist_content_addressed_temp_file;
++use crate::git_backend::GitBackend;
+ use crate::index::Index;
+ use crate::matchers::EverythingMatcher;
+ use crate::object_id::ObjectId as _;
+@@ -48,7 +50,13 @@ use crate::rewrite::merge_commit_trees_no_resolve_without_repo;
+ use crate::tree_merge::resolve_file_values;
+ 
+ /// Current format version of the changed-path index segment file.
+-const FILE_FORMAT_VERSION: u32 = 0;
++const FILE_FORMAT_VERSION: u32 = 1;
++
++/// Marks that the commit at a commit-lookup position has no changed-path data.
++///
++/// This leaves the lower bits available for the offset into the changed-path
++/// table. Format version 0 has no such marker.
++const UNKNOWN_PATHS_FLAG: u32 = 1 << 31;
+ 
+ id_type!(pub(super) ChangedPathIndexSegmentId { hex() });
+ 
+@@ -75,7 +83,7 @@ struct PathPosition(u32);
+ /// u32: number of bytes of path entries
+ ///
+ /// for each commit, in commit-index order
+-///   u32: position in changed-path table
++///   u32: position in changed-path table, with the high bit set if unknown
+ /// u32: number of changed-path entries (as sentinel)
+ /// for each commit, in commit-index order
+ ///   for each changed path, sorted by path
+@@ -105,6 +113,7 @@ struct PathPosition(u32);
+ /// * Shared paths table to save disk space?
+ pub(super) struct ReadonlyChangedPathIndexSegment {
+     id: ChangedPathIndexSegmentId,
++    format_version: u32,
+     num_local_commits: u32,
+     num_changed_paths: u32,
+     num_paths: u32,
+@@ -146,7 +155,7 @@ impl ReadonlyChangedPathIndexSegment {
+         };
+ 
+         let format_version = read_u32(file)?;
+-        if format_version != FILE_FORMAT_VERSION {
++        if format_version > FILE_FORMAT_VERSION {
+             return Err(ReadonlyIndexLoadError::UnexpectedVersion {
+                 kind: "changed-path",
+                 found_version: format_version,
+@@ -181,6 +190,7 @@ impl ReadonlyChangedPathIndexSegment {
+ 
+         Ok(Arc::new(Self {
+             id,
++            format_version,
+             num_local_commits,
+             num_changed_paths,
+             num_paths,
+@@ -208,23 +218,39 @@ impl ReadonlyChangedPathIndexSegment {
+         self.num_paths
+     }
+ 
+-    fn changed_paths(&self, pos: CommitPosition) -> impl ExactSizeIterator<Item = &RepoPath> {
+-        let table = self.changed_paths_table(pos);
++    fn changed_paths(
++        &self,
++        pos: CommitPosition,
++    ) -> Option<impl ExactSizeIterator<Item = &RepoPath>> {
++        let table = self.changed_paths_table(pos)?;
+         let (chunks, _remainder) = table.as_chunks();
+-        chunks
+-            .iter()
+-            .map(|&chunk: &[u8; 4]| PathPosition(u32::from_le_bytes(chunk)))
+-            .map(|pos| self.path(pos))
++        Some(
++            chunks
++                .iter()
++                .map(|&chunk: &[u8; 4]| PathPosition(u32::from_le_bytes(chunk)))
++                .map(|pos| self.path(pos)),
++        )
+     }
+ 
+-    fn changed_paths_table(&self, pos: CommitPosition) -> &[u8] {
++    fn changed_paths_table(&self, pos: CommitPosition) -> Option<&[u8]> {
+         let table = &self.data[self.commit_lookup_base..self.changed_path_lookup_base];
+         let offset = pos.0 as usize * 4;
+-        let start = u32::from_le_bytes(table[offset..][0..4].try_into().unwrap());
+-        let end = u32::from_le_bytes(table[offset..][4..8].try_into().unwrap());
++        let start_raw = u32::from_le_bytes(table[offset..][0..4].try_into().unwrap());
++        if self.format_version > 0 && start_raw & UNKNOWN_PATHS_FLAG != 0 {
++            return None;
++        }
++        let end_raw = u32::from_le_bytes(table[offset..][4..8].try_into().unwrap());
++        let (start, end) = if self.format_version > 0 {
++            (
++                start_raw & !UNKNOWN_PATHS_FLAG,
++                end_raw & !UNKNOWN_PATHS_FLAG,
++            )
++        } else {
++            (start_raw, end_raw)
++        };
+ 
+         let table = &self.data[self.changed_path_lookup_base..self.path_lookup_base];
+-        &table[(start as usize) * 4..(end as usize) * 4]
++        Some(&table[(start as usize) * 4..(end as usize) * 4])
+     }
+ 
+     fn path(&self, pos: PathPosition) -> &RepoPath {
+@@ -254,7 +280,7 @@ impl ReadonlyChangedPathIndexSegment {
+ /// Changed-path index segment which is not serialized to file.
+ #[derive(Clone)]
+ pub(super) struct MutableChangedPathIndexSegment {
+-    entries: Vec<Vec<RepoPathBuf>>,
++    entries: Vec<Option<Vec<RepoPathBuf>>>,
+ }
+ 
+ impl Debug for MutableChangedPathIndexSegment {
+@@ -277,24 +303,36 @@ impl MutableChangedPathIndexSegment {
+         self.entries.len().try_into().unwrap()
+     }
+ 
+-    fn changed_paths(&self, pos: CommitPosition) -> impl ExactSizeIterator<Item = &RepoPath> {
+-        self.entries[pos.0 as usize].iter().map(AsRef::as_ref)
++    fn changed_paths(
++        &self,
++        pos: CommitPosition,
++    ) -> Option<impl ExactSizeIterator<Item = &RepoPath>> {
++        Some(
++            self.entries[pos.0 as usize]
++                .as_ref()?
++                .iter()
++                .map(AsRef::as_ref),
++        )
+     }
+ 
+     fn add_changed_paths(&mut self, paths: Vec<RepoPathBuf>) {
+         debug_assert!(paths.is_sorted_by(|a, b| a < b));
+-        self.entries.push(paths);
++        self.entries.push(Some(paths));
++    }
++
++    fn add_unknown_changed_paths(&mut self) {
++        self.entries.push(None);
+     }
+ 
+     fn extend_from_readonly_segment(&mut self, other_segment: &ReadonlyChangedPathIndexSegment) {
+         self.entries
+             .reserve(usize::try_from(other_segment.num_local_commits()).unwrap());
+         for pos in (0..other_segment.num_local_commits()).map(CommitPosition) {
+-            let paths = other_segment
+-                .changed_paths(pos)
+-                .map(|path| path.to_owned())
+-                .collect();
+-            self.add_changed_paths(paths);
++            if let Some(paths) = other_segment.changed_paths(pos) {
++                self.add_changed_paths(paths.map(|path| path.to_owned()).collect());
++            } else {
++                self.add_unknown_changed_paths();
++            }
+         }
+     }
+ 
+@@ -303,7 +341,13 @@ impl MutableChangedPathIndexSegment {
+     }
+ 
+     fn serialize_into(&self, buf: &mut Vec<u8>) {
+-        let mut paths = self.entries.iter().flatten().unique().collect_vec();
++        let mut paths = self
++            .entries
++            .iter()
++            .filter_map(Option::as_ref)
++            .flatten()
++            .unique()
++            .collect_vec();
+         paths.sort_unstable();
+         let path_pos_map: HashMap<_, _> = paths
+             .iter()
+@@ -322,14 +366,22 @@ impl MutableChangedPathIndexSegment {
+         buf.extend(0_u32.to_le_bytes());
+ 
+         let mut num_changed_paths: u32 = 0;
+-        for paths in &self.entries {
+-            buf.extend(num_changed_paths.to_le_bytes());
+-            num_changed_paths += u32::try_from(paths.len()).unwrap();
++        for entry in &self.entries {
++            let lookup = if entry.is_some() {
++                num_changed_paths
++            } else {
++                num_changed_paths | UNKNOWN_PATHS_FLAG
++            };
++            buf.extend(lookup.to_le_bytes());
++            if let Some(paths) = entry {
++                num_changed_paths += u32::try_from(paths.len()).unwrap();
++                assert!(num_changed_paths < UNKNOWN_PATHS_FLAG);
++            }
+         }
+         buf.extend(num_changed_paths.to_le_bytes()); // sentinel
+         buf[num_changed_paths_offset..][..4].copy_from_slice(&num_changed_paths.to_le_bytes());
+ 
+-        for path in self.entries.iter().flatten() {
++        for path in self.entries.iter().filter_map(Option::as_ref).flatten() {
+             let PathPosition(pos) = path_pos_map[path];
+             buf.extend(pos.to_le_bytes());
+         }
+@@ -489,16 +541,17 @@ impl CompositeChangedPathIndex {
+     }
+ 
+     /// Returns iterator over paths changed at the specified commit. The paths
+-    /// are sorted. Returns `None` if the commit wasn't indexed.
++    /// are sorted. Returns `None` if the commit wasn't indexed or its changed
++    /// paths couldn't be represented.
+     pub(super) fn changed_paths(
+         &self,
+         global_pos: GlobalCommitPosition,
+     ) -> Option<impl ExactSizeIterator<Item = &RepoPath>> {
+         let (local_pos, segment) = self.find_segment(global_pos)?;
+-        Some(segment.map_either(
+-            |x| x.changed_paths(local_pos),
+-            |x| x.changed_paths(local_pos),
+-        ))
++        match segment {
++            Either::Left(segment) => Some(Either::Left(segment.changed_paths(local_pos)?)),
++            Either::Right(segment) => Some(Either::Right(segment.changed_paths(local_pos)?)),
++        }
+     }
+ 
+     /// Adds changed paths of the next commit.
+@@ -517,6 +570,23 @@ impl CompositeChangedPathIndex {
+         self.num_commits += 1;
+     }
+ 
++    /// Records that changed paths of the next commit couldn't be represented.
++    pub(super) fn add_unknown_changed_paths(&mut self) {
++        let segment = self
++            .mutable_segment
++            .as_deref_mut()
++            .expect("should have mutable");
++        segment.add_unknown_changed_paths();
++        self.num_commits += 1;
++    }
++
++    pub(super) fn contains_commit_pos(&self, pos: GlobalCommitPosition) -> bool {
++        let Some(GlobalCommitPosition(start)) = self.start_commit_pos else {
++            return false;
++        };
++        start <= pos.0 && pos.0 - start < self.num_commits
++    }
++
+     /// Squashes parent segments if the mutable segment has more than half the
+     /// commits of its parent segment. This is done recursively, so the stack of
+     /// index segments has O(log n) files.
+@@ -566,12 +636,12 @@ impl CompositeChangedPathIndex {
+ pub(super) async fn collect_changed_paths(
+     index: &dyn Index,
+     commit: &Commit,
+-) -> BackendResult<Vec<RepoPathBuf>> {
++) -> BackendResult<Option<Vec<RepoPathBuf>>> {
+     let parents = commit.parents().await?;
+     if let [p] = parents.as_slice()
+         && commit.tree_ids() == p.tree_ids()
+     {
+-        return Ok(vec![]);
++        return Ok(Some(vec![]));
+     }
+     // Don't resolve the entire tree. It's cheaper to resolve each conflict file
+     // even if we have to visit all files.
+@@ -587,8 +657,40 @@ pub(super) async fn collect_changed_paths(
+             Ok(diff.is_changed().then_some(path))
+         })
+         .try_collect()
+-        .await?;
+-    Ok(paths)
++        .await;
++    match paths {
++        Ok(paths) => Ok(Some(paths)),
++        Err(err)
++            if matches!(
++                &err,
++                BackendError::InvalidUtf8 {
++                    object_type,
++                    ..
++                } if object_type == "tree"
++            ) =>
++        {
++            let from_tree_id = from_tree.tree_ids().as_resolved();
++            let to_tree_id = to_tree.tree_ids().as_resolved();
++            if let (Some(git_backend), Some(from_tree_id), Some(to_tree_id)) =
++                (store.backend_impl::<GitBackend>(), from_tree_id, to_tree_id)
++            {
++                tracing::warn!(
++                    commit_id = %commit.id().hex(),
++                    "ignoring non-UTF-8 Git paths while indexing changed paths"
++                );
++                git_backend
++                    .diff_changed_paths_ignoring_invalid_utf8(from_tree_id, to_tree_id)
++                    .map(Some)
++            } else {
++                tracing::warn!(
++                    commit_id = %commit.id().hex(),
++                    "excluding commit with non-UTF-8 Git paths from changed-path index"
++                );
++                Ok(None)
++            }
++        }
++        Err(err) => Err(err),
++    }
+ }
+ 
+ #[cfg(test)]
+@@ -745,6 +847,62 @@ mod tests {
+         Ok(())
+     }
+ 
++    #[test]
++    fn test_load_file_format_version_0() {
++        let mut mutable_segment = MutableChangedPathIndexSegment::empty();
++        mutable_segment.add_changed_paths(vec![repo_path_buf("foo")]);
++        let mut buf = vec![];
++        mutable_segment.serialize_into(&mut buf);
++        buf[..4].copy_from_slice(&0_u32.to_le_bytes());
++        let id = ChangedPathIndexSegmentId::from_bytes(&Blake2b512::digest(&buf));
++
++        let segment =
++            ReadonlyChangedPathIndexSegment::load_from(&mut &buf[..], id).expect("valid segment");
++        assert_eq!(
++            segment
++                .changed_paths(CommitPosition(0))
++                .unwrap()
++                .collect_vec(),
++            [repo_path("foo")]
++        );
++    }
++
++    #[test_case(false, false; "mutable")]
++    #[test_case(true, false; "readonly")]
++    #[test_case(true, true; "readonly, reloaded")]
++    fn test_composite_unknown_changed_paths(on_disk: bool, reload: bool) -> TestResult {
++        let temp_dir = new_temp_dir();
++        let start_commit_pos = GlobalCommitPosition(1);
++        let mut index = CompositeChangedPathIndex::empty(start_commit_pos);
++        index.make_mutable();
++        index.add_changed_paths(vec![repo_path_buf("foo")]);
++        index.add_unknown_changed_paths();
++        index.add_changed_paths(vec![repo_path_buf("bar")]);
++        if on_disk {
++            index.save_in(temp_dir.path())?;
++        }
++        if reload {
++            let ids = index
++                .readonly_segments()
++                .iter()
++                .map(|segment| segment.id().clone())
++                .collect_vec();
++            index = CompositeChangedPathIndex::load(temp_dir.path(), start_commit_pos, &ids)?;
++        }
++
++        assert_eq!(
++            collect_changed_paths(&index, GlobalCommitPosition(1)),
++            Some(vec![repo_path("foo")])
++        );
++        assert_eq!(collect_changed_paths(&index, GlobalCommitPosition(2)), None);
++        assert!(index.contains_commit_pos(GlobalCommitPosition(2)));
++        assert_eq!(
++            collect_changed_paths(&index, GlobalCommitPosition(3)),
++            Some(vec![repo_path("bar")])
++        );
++        Ok(())
++    }
++
+     #[test_case(false; "with mutable")]
+     #[test_case(true; "fully readonly")]
+     fn test_composite_segmented(on_disk: bool) -> TestResult {
+diff --git a/lib/src/default_index/mutable.rs b/lib/src/default_index/mutable.rs
+index d9dc974..990a39f 100644
+--- a/lib/src/default_index/mutable.rs
++++ b/lib/src/default_index/mutable.rs
+@@ -527,7 +527,11 @@ impl DefaultMutableIndex {
+     // a commit index to merge parent trees, which means we need to borrow self.
+     async fn add_commit_changed_paths(&mut self, commit: &Commit) -> BackendResult<()> {
+         let paths = collect_changed_paths(self, commit).await?;
+-        self.0.changed_paths_mut().add_changed_paths(paths);
++        if let Some(paths) = paths {
++            self.0.changed_paths_mut().add_changed_paths(paths);
++        } else {
++            self.0.changed_paths_mut().add_unknown_changed_paths();
++        }
+         Ok(())
+     }
+ 
+@@ -541,11 +545,15 @@ impl DefaultMutableIndex {
+                 let other_pos = other_commits
+                     .commit_id_to_pos(&entry.commit_id())
+                     .expect("other commits should be merged above");
+-                let Some(paths) = other.changed_paths().changed_paths(other_pos) else {
++                if !other.changed_paths().contains_commit_pos(other_pos) {
+                     break; // no more indexed paths in other index
+-                };
+-                let paths = paths.map(|path| path.to_owned()).collect();
+-                self.0.changed_paths_mut().add_changed_paths(paths);
++                }
++                if let Some(paths) = other.changed_paths().changed_paths(other_pos) {
++                    let paths = paths.map(|path| path.to_owned()).collect();
++                    self.0.changed_paths_mut().add_changed_paths(paths);
++                } else {
++                    self.0.changed_paths_mut().add_unknown_changed_paths();
++                }
+             }
+         }
+     }
+diff --git a/lib/src/default_index/store.rs b/lib/src/default_index/store.rs
+index a53ca63..57606b4 100644
+--- a/lib/src/default_index/store.rs
++++ b/lib/src/default_index/store.rs
+@@ -407,7 +407,11 @@ impl DefaultIndexStore {
+             let commit_id = index.as_composite().commits().entry_by_pos(pos).commit_id();
+             let commit = store.get_commit_async(&commit_id).await?;
+             let paths = collect_changed_paths(&index, &commit).await?;
+-            changed_paths.add_changed_paths(paths);
++            if let Some(paths) = paths {
++                changed_paths.add_changed_paths(paths);
++            } else {
++                changed_paths.add_unknown_changed_paths();
++            }
+             Ok(())
+         };
+ 
+diff --git a/lib/src/git_backend.rs b/lib/src/git_backend.rs
+index 0f272e9..13c0010 100644
+--- a/lib/src/git_backend.rs
++++ b/lib/src/git_backend.rs
+@@ -567,6 +567,65 @@ impl GitBackend {
+             .map_err(|err| to_read_object_err(err, tree_id))
+     }
+ 
++    pub(crate) fn diff_changed_paths_ignoring_invalid_utf8(
++        &self,
++        from_tree_id: &TreeId,
++        to_tree_id: &TreeId,
++    ) -> BackendResult<Vec<RepoPathBuf>> {
++        let repo = self.git_repo();
++        let find_tree = |id: &TreeId| {
++            let git_tree_id = validate_git_object_id(&repo, id)?;
++            repo.try_find_object(git_tree_id)
++                .map_err(|err| to_read_object_err(err, id))?
++                .ok_or_else(|| not_found_err(id))?
++                .try_into_tree()
++                .map_err(|err| to_read_object_err(err, id))
++        };
++        let from_tree = find_tree(from_tree_id)?;
++        let to_tree = find_tree(to_tree_id)?;
++        let mut paths = Vec::new();
++        from_tree
++            .changes()
++            .map_err(|err| BackendError::Other(err.into()))?
++            .options(|opts| {
++                opts.track_path().track_rewrites(None);
++            })
++            .for_each_to_obtain_tree(&to_tree, |change| -> gix::ExnResult<_> {
++                use gix::object::tree::diff::Change;
++
++                let (location, is_tree_only_change) = match change {
++                    Change::Addition {
++                        location,
++                        entry_mode,
++                        ..
++                    }
++                    | Change::Deletion {
++                        location,
++                        entry_mode,
++                        ..
++                    } => (location, entry_mode.is_tree()),
++                    Change::Modification {
++                        location,
++                        previous_entry_mode,
++                        entry_mode,
++                        ..
++                    } => (
++                        location,
++                        previous_entry_mode.is_tree() && entry_mode.is_tree(),
++                    ),
++                    Change::Rewrite { .. } => unreachable!("rewrite tracking is disabled"),
++                };
++                if !is_tree_only_change && let Ok(path) = str::from_utf8(location) {
++                    paths.push(RepoPathBuf::from_internal_string(path).unwrap());
++                }
++                Ok(gix::object::tree::diff::Action::Continue(()))
++            })
++            .map_err(|err| BackendError::Other(err.into()))?;
++        paths.sort_unstable();
++        paths.dedup();
++        Ok(paths)
++    }
++
+     // Similar to gix's write_blob, but compute the hash outside our lock to
+     // reduce contention.
+     fn write_blob(
+diff --git a/lib/tests/test_index.rs b/lib/tests/test_index.rs
+index b34e31f..92031f2 100644
+--- a/lib/tests/test_index.rs
++++ b/lib/tests/test_index.rs
+@@ -20,14 +20,17 @@ use futures::StreamExt as _;
+ use itertools::Itertools as _;
+ use jj_lib::backend::ChangeId;
+ use jj_lib::backend::CommitId;
++use jj_lib::backend::TreeId;
+ use jj_lib::commit::Commit;
+ use jj_lib::default_index::DefaultIndexStore;
+ use jj_lib::default_index::DefaultIndexStoreError;
+ use jj_lib::default_index::DefaultMutableIndex;
+ use jj_lib::default_index::DefaultReadonlyIndex;
++use jj_lib::git_backend::GitBackend;
+ use jj_lib::index::Index;
+ use jj_lib::index::ResolvedChangeState;
+ use jj_lib::index::ResolvedChangeTargets;
++use jj_lib::merged_tree::MergedTree;
+ use jj_lib::object_id::HexPrefix;
+ use jj_lib::object_id::ObjectId as _;
+ use jj_lib::object_id::PrefixResolution;
+@@ -47,6 +50,7 @@ use pollster::FutureExt as _;
+ use test_case::test_case;
+ use testutils::CommitBuilderExt as _;
+ use testutils::TestRepo;
++use testutils::TestRepoBackend;
+ use testutils::TestResult;
+ use testutils::assert_tree_eq;
+ use testutils::commit_transactions;
+@@ -930,6 +934,66 @@ fn test_build_changed_path_segments() -> TestResult {
+     Ok(())
+ }
+ 
++#[test]
++fn test_changed_path_index_ignores_invalid_utf8_git_paths() -> TestResult {
++    let test_repo = TestRepo::init_with_backend(TestRepoBackend::Git);
++    let repo = test_repo.repo;
++    let root_commit_id = repo.store().root_commit_id();
++    let git_backend: &GitBackend = repo.store().backend_impl().unwrap();
++    let git_repo = git_backend.git_repo();
++    let blob_id = git_repo.write_blob(b"")?.detach();
++    let write_tree = |include_valid_path| -> TestResult<TreeId> {
++        let mut entries = vec![gix::objs::tree::Entry {
++            mode: gix::object::tree::EntryKind::Blob.into(),
++            filename: gix::bstr::BString::from(vec![0xa0]),
++            oid: blob_id,
++        }];
++        if include_valid_path {
++            entries.push(gix::objs::tree::Entry {
++                mode: gix::object::tree::EntryKind::Blob.into(),
++                filename: "valid".into(),
++                oid: blob_id,
++            });
++        }
++        entries.sort_by(|left, right| left.filename.cmp(&right.filename));
++        let tree_id = git_repo.write_object(gix::objs::Tree { entries })?;
++        Ok(TreeId::from_bytes(tree_id.as_bytes()))
++    };
++    let tree1 = MergedTree::resolved(repo.store().clone(), write_tree(false)?);
++    let tree2 = MergedTree::resolved(repo.store().clone(), write_tree(true)?);
++
++    let mut tx = repo.start_transaction();
++    let commit1 = tx
++        .repo_mut()
++        .new_commit(vec![root_commit_id.clone()], tree1.clone())
++        .write_unwrap();
++    let commit1_other = tx
++        .repo_mut()
++        .new_commit(vec![root_commit_id.clone()], tree1)
++        .write_unwrap();
++    let commit2 = tx
++        .repo_mut()
++        .new_commit(
++            vec![commit1.id().clone(), commit1_other.id().clone()],
++            tree2,
++        )
++        .write_unwrap();
++    let repo = tx.commit("test").block_on()?;
++    let default_index_store: &DefaultIndexStore = repo.index_store().downcast_ref().unwrap();
++    default_index_store
++        .build_changed_path_index_at_operation(repo.op_id(), repo.store(), u32::MAX, |_| ())
++        .block_on()?;
++    let repo = repo.reload_at(repo.operation()).block_on()?;
++
++    assert_eq!(collect_changed_paths(&repo, commit1.id()), Some(vec![]));
++    assert_eq!(
++        collect_changed_paths(&repo, commit1_other.id()),
++        Some(vec![])
++    );
++    assert_eq!(collect_changed_paths(&repo, commit2.id()), None);
++    Ok(())
++}
++
+ #[test]
+ fn test_build_changed_path_segments_partially_enabled() -> TestResult {
+     let test_repo = TestRepo::init();

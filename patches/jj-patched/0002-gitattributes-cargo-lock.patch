@@ -1,0 +1,20 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index f5189ca..e23b767 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2747,6 +2747,7 @@ dependencies = [
+  "eyre",
+  "futures 0.3.34",
+  "gix",
++ "gix-attributes",
+  "gix-ignore",
+  "globset",
+  "indexmap",
+Subject: [PATCH] Record jj-lib's direct gix-attributes dependency
+
+Upstream-author: Kaiyi Li <kaiyili@google.com>
+Upstream-commit: https://github.com/jj-vcs/jj/commit/46817e03432803862b2da765d225d7b3f3ee9176
+Rebased-onto: https://github.com/jj-vcs/jj/releases/tag/v0.46.0
+
+Cargo.lock-only companion to 0001-gitattributes-eol-support.patch. Keeping
+this hunk separate lets the formula apply it independently of the source patch.

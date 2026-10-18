@@ -1,0 +1,3705 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 8cfa21f..0f5fe0c 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -67,6 +67,7 @@ gix = { version = "0.88.0", default-features = false, features = [
+     "sha1",
+     "sha256",
+ ] }
++gix-attributes = "0.36.0"
+ gix-ignore = { version = "0.23.0" }
+ globset = "0.4.18"
+ hashbrown = { version = "0.17.1", default-features = false, features = ["inline-more"] }
+diff --git a/cli/src/commands/file/edit.rs b/cli/src/commands/file/edit.rs
+index f1d7154..116207e 100644
+--- a/cli/src/commands/file/edit.rs
++++ b/cli/src/commands/file/edit.rs
+@@ -21,6 +21,7 @@ use jj_lib::file_util::IoResultExt as _;
+ use jj_lib::fsmonitor::FsmonitorSettings;
+ use jj_lib::gitignore::GitIgnoreFile;
+ use jj_lib::local_working_copy::EolConversionMode;
++use jj_lib::local_working_copy::EolConversionSettings;
+ use jj_lib::local_working_copy::ExecChangeSetting;
+ use jj_lib::local_working_copy::TreeState;
+ use jj_lib::local_working_copy::TreeStateSettings;
+@@ -118,7 +119,11 @@ pub(crate) async fn cmd_file_edit(
+     std::fs::create_dir(&state_dir).context(&state_dir)?;
+     let tree_state_settings = TreeStateSettings {
+         conflict_marker_style,
+-        eol_conversion_mode: EolConversionMode::None,
++        eol_conversion_settings: EolConversionSettings {
++            use_git_attributes: false,
++            default_eol_attributes: EolConversionMode::None,
++            eol_conversion_mode: EolConversionMode::None,
++        },
+         exec_change_setting: ExecChangeSetting::Auto,
+         fsmonitor_settings: FsmonitorSettings::None,
+     };
+diff --git a/cli/src/commands/run.rs b/cli/src/commands/run.rs
+index 974e8c7..0ca6e61 100644
+--- a/cli/src/commands/run.rs
++++ b/cli/src/commands/run.rs
+@@ -40,6 +40,7 @@ use jj_lib::conflicts::ConflictMarkerStyle;
+ use jj_lib::fsmonitor::FsmonitorSettings;
+ use jj_lib::gitignore::GitIgnoreFile;
+ use jj_lib::local_working_copy::EolConversionMode;
++use jj_lib::local_working_copy::EolConversionSettings;
+ use jj_lib::local_working_copy::ExecChangeSetting;
+ use jj_lib::local_working_copy::TreeState;
+ use jj_lib::local_working_copy::TreeStateError;
+@@ -116,7 +117,11 @@ impl From<RunError> for CommandError {
+ fn default_tree_state_settings() -> TreeStateSettings {
+     TreeStateSettings {
+         conflict_marker_style: ConflictMarkerStyle::Snapshot,
+-        eol_conversion_mode: EolConversionMode::None,
++        eol_conversion_settings: EolConversionSettings {
++            use_git_attributes: false,
++            default_eol_attributes: EolConversionMode::None,
++            eol_conversion_mode: EolConversionMode::None,
++        },
+         exec_change_setting: ExecChangeSetting::Auto,
+         fsmonitor_settings: FsmonitorSettings::None,
+     }
+diff --git a/cli/src/merge_tools/diff_working_copies.rs b/cli/src/merge_tools/diff_working_copies.rs
+index 771cc58..525ae19 100644
+--- a/cli/src/merge_tools/diff_working_copies.rs
++++ b/cli/src/merge_tools/diff_working_copies.rs
+@@ -11,6 +11,7 @@ use jj_lib::conflicts::ConflictMarkerStyle;
+ use jj_lib::fsmonitor::FsmonitorSettings;
+ use jj_lib::gitignore::GitIgnoreFile;
+ use jj_lib::local_working_copy::EolConversionMode;
++use jj_lib::local_working_copy::EolConversionSettings;
+ use jj_lib::local_working_copy::ExecChangeSetting;
+ use jj_lib::local_working_copy::TreeState;
+ use jj_lib::local_working_copy::TreeStateError;
+@@ -167,7 +168,11 @@ pub(crate) async fn check_out_trees(
+         std::fs::create_dir(&state_dir).map_err(DiffCheckoutError::SetUpDir)?;
+         let tree_state_settings = TreeStateSettings {
+             conflict_marker_style,
+-            eol_conversion_mode: EolConversionMode::None,
++            eol_conversion_settings: EolConversionSettings {
++                use_git_attributes: false,
++                default_eol_attributes: EolConversionMode::None,
++                eol_conversion_mode: EolConversionMode::None,
++            },
+             exec_change_setting: ExecChangeSetting::Auto,
+             fsmonitor_settings: FsmonitorSettings::None,
+         };
+diff --git a/core/src/repo_path.rs b/core/src/repo_path.rs
+index 9aa43d5..b1889b7 100644
+--- a/core/src/repo_path.rs
++++ b/core/src/repo_path.rs
+@@ -66,6 +66,9 @@ pub struct RepoPathComponent {
+ }
+ 
+ impl RepoPathComponent {
++    /// The `.gitattributes` file name component.
++    pub const DOT_GITATTRIBUTES: &Self = Self::new_unchecked(".gitattributes");
++
+     /// Wraps `value` as `RepoPathComponent`.
+     ///
+     /// Returns an error if the input `value` is empty or contains path
+diff --git a/lib/Cargo.toml b/lib/Cargo.toml
+index 1722dde..6a898eb 100644
+--- a/lib/Cargo.toml
++++ b/lib/Cargo.toml
+@@ -37,6 +37,7 @@ either = { workspace = true }
+ futures = { workspace = true }
+ gix = { workspace = true, optional = true }
+ gix-ignore = { workspace = true }
++gix-attributes = { workspace = true }
+ globset = { workspace = true }
+ indexmap = { workspace = true }
+ interim = { workspace = true }
+@@ -59,7 +60,7 @@ smallvec = { workspace = true }
+ strsim = { workspace = true }
+ tempfile = { workspace = true }
+ thiserror = { workspace = true }
+-tokio = { workspace = true, optional = true }
++tokio = { workspace = true }
+ toml_edit = { workspace = true }
+ tracing = { workspace = true }
+ watchman_client = { workspace = true, optional = true }
+@@ -88,7 +89,7 @@ nix = { workspace = true, features = [ "fs" ] }
+ [features]
+ default = ["git"]
+ git = ["dep:gix"]
+-watchman = ["dep:watchman_client", "dep:tokio"]
++watchman = ["dep:watchman_client"]
+ testing = ["git"]
+ 
+ [lints]
+diff --git a/lib/src/config/misc.toml b/lib/src/config/misc.toml
+index 62ebabb..432fb1c 100644
+--- a/lib/src/config/misc.toml
++++ b/lib/src/config/misc.toml
+@@ -52,6 +52,8 @@ name = ""
+ [working-copy]
+ eol-conversion = "none"
+ exec-bit-change = "auto"
++eol-conversion-use-gitattributes = false
++gitattributes-default-eol = "none"
+ 
+ [experimental]
+ record-predecessors-in-commit = true
+diff --git a/lib/src/eol.rs b/lib/src/eol.rs
+index bfb111d..b5f34a6 100644
+--- a/lib/src/eol.rs
++++ b/lib/src/eol.rs
+@@ -18,8 +18,95 @@ use futures::AsyncReadExt as _;
+ use futures::io::Cursor;
+ 
+ use crate::config::ConfigGetError;
++use crate::gitattributes::GitAttributes;
++use crate::gitattributes::State;
++use crate::repo_path::RepoPath;
+ use crate::settings::UserSettings;
+ 
++type BoxError = Box<dyn std::error::Error + Send + Sync>;
++
++/// The gitattributes related to eol conversion.
++#[derive(PartialEq, Eq, Debug, Clone)]
++pub(crate) struct EolGitAttributes {
++    /// The state of the `eol` gitattribute.
++    ///
++    /// See https://git-scm.com/docs/gitattributes#_eol.
++    pub eol: State,
++    /// The state of the `text` gitattribute.
++    ///
++    /// See https://git-scm.com/docs/gitattributes#_text.
++    pub text: State,
++    /// The state of the `crlf` gitattribute.
++    ///
++    /// See https://git-scm.com/docs/gitattributes#_backwards_compatibility_with_crlf_attribute.
++    pub crlf: State,
++}
++
++impl EolGitAttributes {
++    /// Apply the automatic state conversion based on the states of other
++    /// attributes.
++    ///
++    /// Currently, we handle 2 types of conversion:
++    ///
++    /// * Specifying `eol` automatically sets `text` if `text` was left
++    ///   unspecified.
++    /// * The `crlf` backwards compatibility is converted to proper `text` and
++    ///   `eol` states.
++    fn normalize(mut self) -> Self {
++        // If the text and eol attributes are not one of the defined states, they behave
++        // as if they are unspecified.
++        let text_unspecified = match &self.text {
++            State::Unspecified => true,
++            State::Set | State::Unset => false,
++            State::Value(value) => value != b"auto",
++        };
++
++        let eol_unspecified = match &self.eol {
++            State::Unspecified | State::Set | State::Unset => true,
++            State::Value(value) => value != b"lf" && value != b"crlf",
++        };
++
++        if text_unspecified && !eol_unspecified {
++            // Specifying eol automatically sets text if text was left unspecified.
++            self.text = State::Set;
++        }
++
++        if text_unspecified && eol_unspecified {
++            // crlf exists for backwards compatibility, so it only has effect when both text
++            // and eol are unspecified.
++            match &self.crlf {
++                State::Set => self.text = State::Set,
++                State::Unset => self.text = State::Unset,
++                State::Value(value) if value == b"input" => {
++                    // While the gitattributes doc only mentions that crlf=input is equivalent to
++                    // eol=lf, the doc also mentions that specifying eol automatically sets text if
++                    // text was left unspecified.
++                    self.text = State::Set;
++                    self.eol = State::Value(b"lf".to_vec());
++                }
++                _ => {}
++            }
++        }
++
++        self
++    }
++}
++
++pub(crate) trait GitAttributesExt {
++    async fn search_eol(&self, path: &RepoPath) -> Result<EolGitAttributes, BoxError>;
++}
++
++impl GitAttributesExt for GitAttributes {
++    async fn search_eol(&self, path: &RepoPath) -> Result<EolGitAttributes, BoxError> {
++        let mut attributes = self.search(path, &["text", "eol", "crlf"]).await?;
++        Ok(EolGitAttributes {
++            text: attributes.remove("text").unwrap_or(State::Unspecified),
++            eol: attributes.remove("eol").unwrap_or(State::Unspecified),
++            crlf: attributes.remove("crlf").unwrap_or(State::Unspecified),
++        })
++    }
++}
++
+ fn is_binary(bytes: &[u8]) -> bool {
+     // TODO(06393993): align the algorithm with git so that the git config autocrlf
+     // users won't see different decisions on whether a file is binary and needs to
+@@ -37,16 +124,131 @@ fn is_binary(bytes: &[u8]) -> bool {
+     false
+ }
+ 
++/// Indicate whether EOL conversion needs to be applied on update. Part of
++/// [`EffectiveEolMode`].
++enum ConvertMode {
++    /// Apply EOL conversion on both snapshot and update. Equivalent to
++    /// `eol=crlf`.
++    InputOutput,
++    /// Apply EOL conversion only on snapshot. Equivalent to `eol=lf`.
++    Input,
++}
++
++/// A type that is resolved from [`EolConversionSettings`], and
++/// [`EolGitAttributes`]` with fewer variants.
++enum EffectiveEolMode {
++    /// The file is a text file, and may apply EOL conversion. Equivalent to set
++    /// text.
++    Text(ConvertMode),
++    /// Use heuristics to detect if EOL conversion should be applied. Equivalent
++    /// to `text=auto`.
++    Auto(ConvertMode),
++    /// The file is a binary file, and we should not apply EOL conversion.
++    /// Equivalent to `-text`.
++    Binary,
++}
++
++impl EffectiveEolMode {
++    /// Resolve the attributes and the settings to [`EffectiveEolMode`] which
++    /// has much less variants.
++    fn new(attr: EolGitAttributes, settings: &EolConversionSettings) -> Self {
++        let attr = attr.normalize();
++
++        fn resolve_convert_mode(
++            attr: &EolGitAttributes,
++            settings: &EolConversionSettings,
++        ) -> ConvertMode {
++            debug_assert_eq!(
++                attr,
++                &attr.clone().normalize(),
++                "The passed in EolGitAttributes must be normalized, so that we don't have to \
++                 consider the crlf attribute separately."
++            );
++
++            // If the eol attribute is set explicitly, ConvertMode is decide by the
++            // attribute.
++            if let State::Value(value) = &attr.eol {
++                if value == b"crlf" {
++                    return ConvertMode::InputOutput;
++                }
++                if value == b"lf" {
++                    return ConvertMode::Input;
++                }
++            }
++
++            // If the eol attribute is unspecified or not in a state defined in the
++            // document, the ConvertMode is decided by the settings, following
++            // https://git-scm.com/docs/gitattributes#Documentation/gitattributes.txt-Unspecified-1-1.
++            //
++            // > If the eol attribute is unspecified for a file, its line endings in the
++            // > working directory are determined by the core.autocrlf or core.eol
++            // > configuration variable.
++            match settings.eol_conversion_mode {
++                EolConversionMode::InputOutput => return ConvertMode::InputOutput,
++                EolConversionMode::Input => return ConvertMode::Input,
++                EolConversionMode::None => {}
++            }
++            // The working-copy.gitattributes-default-eol setting only takes effect when the
++            // working-copy.eol-conversion setting is set to "none", following
++            // https://git-scm.com/docs/git-config#Documentation/git-config.txt-coreeol.
++            //
++            // > Note that this value is ignored if core.autocrlf is set to true or input.
++            match settings.default_eol_attributes {
++                EolConversionMode::InputOutput => return ConvertMode::InputOutput,
++                EolConversionMode::Input => return ConvertMode::Input,
++                EolConversionMode::None => {}
++            }
++            // If the eol attribute is unspecified and the settings are none, ConvertMode is
++            // decided based on the platform, following
++            // https://git-scm.com/docs/gitattributes#Documentation/gitattributes.txt-Unspecified-1-1.
++            //
++            // > If text is set but neither of those variables is, the default is eol=crlf
++            // > on Windows and eol=lf on all other platforms.
++            if cfg!(windows) {
++                ConvertMode::InputOutput
++            } else {
++                ConvertMode::Input
++            }
++        }
++
++        match &attr.text {
++            State::Set => Self::Text(resolve_convert_mode(&attr, settings)),
++            State::Unset => Self::Binary,
++            State::Value(value) if value == b"auto" => {
++                Self::Auto(resolve_convert_mode(&attr, settings))
++            }
++            // If the text attributes is unspecified or not in a state defined in the doc, we use
++            // the working-copy.eol-conversion setting, following
++            // https://git-scm.com/docs/gitattributes#Documentation/gitattributes.txt-Unspecified-1.
++            //
++            // > If the text attribute is unspecified, Git uses the core.autocrlf configuration
++            // > variable to determine if the file should be converted.
++            _ => match settings.eol_conversion_mode {
++                // If the setting is none, we don't apply EOL conversion.
++                EolConversionMode::None => Self::Binary,
++                // If the setting is not none, we probe the contents and decide whether to apply EOL
++                // conversion, following
++                // https://git-scm.com/docs/git-config#Documentation/git-config.txt-coreautocrlf.
++                //
++                // > Setting this variable to "true" is the same as setting the text attribute to
++                // > "auto" on all files and core.eol to "crlf".
++                //
++                // > This variable can be set to input, in which case no output conversion is
++                // > performed.
++                _ => Self::Auto(resolve_convert_mode(&attr, settings)),
++            },
++        }
++    }
++}
++
+ #[derive(Clone)]
+ pub(crate) struct TargetEolStrategy {
+-    eol_conversion_mode: EolConversionMode,
++    settings: EolConversionSettings,
+ }
+ 
+ impl TargetEolStrategy {
+-    pub(crate) fn new(eol_conversion_mode: EolConversionMode) -> Self {
+-        Self {
+-            eol_conversion_mode,
+-        }
++    pub(crate) fn new(settings: EolConversionSettings) -> Self {
++        Self { settings }
+     }
+ 
+     /// The limit to probe for whether the file is binary is 8KB.
+@@ -80,13 +282,43 @@ impl TargetEolStrategy {
+         Ok(is_binary(slice_to_check))
+     }
+ 
+-    pub(crate) async fn convert_eol_for_snapshot<'a>(
++    async fn get_effective_eol_mode<'a, F>(
++        &self,
++        get_git_attributes: F,
++    ) -> Result<EffectiveEolMode, BoxError>
++    where
++        F: (AsyncFnOnce() -> Result<EolGitAttributes, BoxError>) + Send + Unpin + 'a,
++    {
++        let git_attributes = if self.settings.use_git_attributes {
++            // We only read the gitattributes file if necessary to save the cost for users
++            // who don't use gitattributes.
++            get_git_attributes().await?
++        } else {
++            EolGitAttributes {
++                eol: State::Unspecified,
++                text: State::Unspecified,
++                crlf: State::Unspecified,
++            }
++        };
++        Ok(EffectiveEolMode::new(git_attributes, &self.settings))
++    }
++
++    pub(crate) async fn convert_eol_for_snapshot<'a, F>(
+         &self,
+         mut contents: impl AsyncRead + Send + Unpin + 'a,
+-    ) -> Result<Box<dyn AsyncRead + Send + Unpin + 'a>, std::io::Error> {
+-        match self.eol_conversion_mode {
+-            EolConversionMode::None => Ok(Box::new(contents)),
+-            EolConversionMode::Input | EolConversionMode::InputOutput => {
++        get_git_attributes: F,
++    ) -> Result<Box<dyn AsyncRead + Send + Unpin + 'a>, BoxError>
++    where
++        F: (AsyncFnOnce() -> Result<EolGitAttributes, BoxError>) + Send + Unpin + 'a,
++    {
++        // For snapshot, we don't care about ConvertMode, if EOL conversion is applied,
++        // we always convert the EOL to LF.
++        match self.get_effective_eol_mode(get_git_attributes).await? {
++            EffectiveEolMode::Binary => Ok(Box::new(contents)),
++            EffectiveEolMode::Text(_) => convert_eol(contents, TargetEol::Lf)
++                .await
++                .map_err(|e| Box::new(e) as _),
++            EffectiveEolMode::Auto(_) => {
+                 let mut peek = vec![];
+                 let target_eol = if Self::probe_for_binary(&mut contents, &mut peek).await? {
+                     TargetEol::PassThrough
+@@ -95,18 +327,33 @@ impl TargetEolStrategy {
+                 };
+                 let peek = Cursor::new(peek);
+                 let contents = peek.chain(contents);
+-                convert_eol(contents, target_eol).await
++                convert_eol(contents, target_eol)
++                    .await
++                    .map_err(|e| Box::new(e) as _)
+             }
+         }
+     }
+ 
+-    pub(crate) async fn convert_eol_for_update<'a>(
++    pub(crate) async fn convert_eol_for_update<'a, F>(
+         &self,
+         mut contents: impl AsyncRead + Send + Unpin + 'a,
+-    ) -> Result<Box<dyn AsyncRead + Send + Unpin + 'a>, std::io::Error> {
+-        match self.eol_conversion_mode {
+-            EolConversionMode::None | EolConversionMode::Input => Ok(Box::new(contents)),
+-            EolConversionMode::InputOutput => {
++        get_git_attributes: F,
++    ) -> Result<Box<dyn AsyncRead + Send + Unpin + 'a>, BoxError>
++    where
++        F: (AsyncFnOnce() -> Result<EolGitAttributes, BoxError>) + Send + Unpin + 'a,
++    {
++        match self.get_effective_eol_mode(get_git_attributes).await? {
++            // For update, if EffectiveEolMode resolves to Binary or the ConvertMode is Input, we
++            // don't need to apply any conversion.
++            EffectiveEolMode::Binary
++            | EffectiveEolMode::Text(ConvertMode::Input)
++            | EffectiveEolMode::Auto(ConvertMode::Input) => Ok(Box::new(contents)),
++            EffectiveEolMode::Text(ConvertMode::InputOutput) => {
++                convert_eol(contents, TargetEol::Crlf)
++                    .await
++                    .map_err(|e| Box::new(e) as _)
++            }
++            EffectiveEolMode::Auto(ConvertMode::InputOutput) => {
+                 let mut peek = vec![];
+                 let target_eol = if Self::probe_for_binary(&mut contents, &mut peek).await? {
+                     TargetEol::PassThrough
+@@ -115,7 +362,9 @@ impl TargetEolStrategy {
+                 };
+                 let peek = Cursor::new(peek);
+                 let contents = peek.chain(contents);
+-                convert_eol(contents, target_eol).await
++                convert_eol(contents, target_eol)
++                    .await
++                    .map_err(|e| Box::new(e) as _)
+             }
+         }
+     }
+@@ -137,11 +386,48 @@ pub enum EolConversionMode {
+     InputOutput,
+ }
+ 
+-impl EolConversionMode {
+-    /// Try to create the [`EolConversionMode`] based on the
+-    /// `working-copy.eol-conversion` setting in the [`UserSettings`].
++/// EOL conversion user settings.
++#[derive(Debug, PartialEq, Eq, Copy, Clone)]
++pub struct EolConversionSettings {
++    /// A killer switch on whether EOL conversion should read gitattributes.
++    /// When the value is `false`, the implementation shouldn't read any
++    /// `gitattributes` files so that the user that doesn't need this feature
++    /// pay little cost if not zero.
++    pub use_git_attributes: bool,
++    /// The equivalent of the git [`core.eol`] config. It has the same 3 valid
++    /// values as [`Self::eol_conversion_mode`]:
++    /// [`EolConversionMode::InputOutput`], [`EolConversionMode::Input`],
++    /// [`EolConversionMode::None`]. When the [`Self::eol_conversion_mode`]
++    /// setting is not [`EolConversionMode::None`], this setting is ignored
++    /// following [the gitattributes doc]. Note that:
++    /// - The names are different from the actual `eol` `gitattributes`, so it
++    ///   can be confusing, but we do our best to document this divergence.
++    /// - We don't have an equivalent for `native` in `core.eol`, because we
++    ///   don't think it's necessary: the user should always specify `input` or
++    ///   `input-output` explicitly, and the `jj` EOL settings are not supposed
++    ///   to be shared across multiple machines.
++    ///
++    /// [`core.eol`]: https://git-scm.com/docs/git-config#Documentation/git-config.txt-coreeol
++    /// [the gitattributes doc]:
++    /// https://git-scm.com/docs/git-config#Documentation/git-config.txt-coreeol
++    pub default_eol_attributes: EolConversionMode,
++    /// The equivalent of the git [`core.autocrlf`] config.
++    ///
++    /// [`core.autocrlf`]:
++    /// https://git-scm.com/docs/git-config#Documentation/git-config.txt-coreautocrlf
++    pub eol_conversion_mode: EolConversionMode,
++}
++
++impl EolConversionSettings {
++    /// Try to create the [`EolConversionSettings`] based on the
++    /// [`UserSettings`].
+     pub fn try_from_settings(user_settings: &UserSettings) -> Result<Self, ConfigGetError> {
+-        user_settings.get("working-copy.eol-conversion")
++        Ok(Self {
++            use_git_attributes: user_settings
++                .get_bool("working-copy.eol-conversion-use-gitattributes")?,
++            default_eol_attributes: user_settings.get("working-copy.gitattributes-default-eol")?,
++            eol_conversion_mode: user_settings.get("working-copy.eol-conversion")?,
++        })
+     }
+ }
+ 
+@@ -194,6 +480,7 @@ mod tests {
+     use std::task::Poll;
+ 
+     use test_case::test_case;
++    use test_case::test_matrix;
+ 
+     use super::*;
+ 
+@@ -290,38 +577,48 @@ mod tests {
+     }
+ 
+     #[tokio::main(flavor = "current_thread")]
+-    #[test_case(TargetEolStrategy {
+-          eol_conversion_mode: EolConversionMode::None,
+-      }, b"\r\n", b"\r\n"; "none settings")]
+-    #[test_case(TargetEolStrategy {
+-          eol_conversion_mode: EolConversionMode::Input,
+-      }, b"\r\n", b"\n"; "input settings text input")]
+-    #[test_case(TargetEolStrategy {
+-          eol_conversion_mode: EolConversionMode::InputOutput,
+-      }, b"\r\n", b"\n"; "input output settings text input")]
+-    #[test_case(TargetEolStrategy {
+-          eol_conversion_mode: EolConversionMode::Input,
+-      }, b"\0\r\n", b"\0\r\n"; "input settings binary input")]
+-    #[test_case(TargetEolStrategy {
+-          eol_conversion_mode: EolConversionMode::InputOutput,
+-      }, b"\0\r\n", b"\0\r\n"; "input output settings binary input with NUL")]
+-    #[test_case(TargetEolStrategy {
+-          eol_conversion_mode: EolConversionMode::InputOutput,
+-      }, b"\r\r\n", b"\r\r\n"; "input output settings binary input with lone CR")]
+-    #[test_case(TargetEolStrategy {
+-          eol_conversion_mode: EolConversionMode::Input,
+-      }, &[0; 20 << 10], &[0; 20 << 10]; "input settings long binary input")]
+-    #[test_case(TargetEolStrategy {
+-          eol_conversion_mode: EolConversionMode::Input,
+-      }, &test_probe_limit_input_crlf(), &test_probe_limit_input_lf(); "input settings with CRLF on probe boundary")]
++    #[test_case(EolConversionMode::None, b"\r\n", b"\r\n"; "none settings")]
++    #[test_case(EolConversionMode::Input, b"\r\n", b"\n"; "input settings text input")]
++    #[test_case(EolConversionMode::InputOutput, b"\r\n", b"\n"; "input output settings text input")]
++    #[test_case(EolConversionMode::Input, b"\0\r\n", b"\0\r\n"; "input settings binary input")]
++    #[test_case(
++        EolConversionMode::InputOutput,
++        b"\0\r\n",
++        b"\0\r\n";
++        "input output settings binary input with NUL"
++    )]
++    #[test_case(
++        EolConversionMode::InputOutput,
++        b"\r\r\n",
++        b"\r\r\n";
++        "input output settings binary input with lone CR"
++    )]
++    #[test_case(
++        EolConversionMode::Input,
++        &[0; 20 << 10],
++        &[0; 20 << 10];
++        "input settings long binary input"
++    )]
++    #[test_case(
++        EolConversionMode::Input,
++        &test_probe_limit_input_crlf(),
++        &test_probe_limit_input_lf();
++        "input settings with CRLF on probe boundary"
++    )]
+     async fn test_eol_strategy_convert_eol_for_snapshot(
+-        strategy: TargetEolStrategy,
++        eol_conversion_mode: EolConversionMode,
+         contents: &[u8],
+         expected_output: &[u8],
+     ) {
++        let settings = EolConversionSettings {
++            use_git_attributes: false,
++            default_eol_attributes: EolConversionMode::None,
++            eol_conversion_mode,
++        };
++        let strategy = TargetEolStrategy::new(settings);
+         let mut actual_output = vec![];
+         strategy
+-            .convert_eol_for_snapshot(contents)
++            .convert_eol_for_snapshot(contents, async || panic!("should not read gitattributes"))
+             .await
+             .unwrap()
+             .read_to_end(&mut actual_output)
+@@ -331,29 +628,35 @@ mod tests {
+     }
+ 
+     #[tokio::main(flavor = "current_thread")]
+-    #[test_case(TargetEolStrategy {
+-          eol_conversion_mode: EolConversionMode::None,
+-      }, b"\n", b"\n"; "none settings")]
+-    #[test_case(TargetEolStrategy {
+-          eol_conversion_mode: EolConversionMode::Input,
+-      }, b"\n", b"\n"; "input settings")]
+-    #[test_case(TargetEolStrategy {
+-          eol_conversion_mode: EolConversionMode::InputOutput,
+-      }, b"\n", b"\r\n"; "input output settings text input")]
+-    #[test_case(TargetEolStrategy {
+-          eol_conversion_mode: EolConversionMode::InputOutput,
+-      }, b"\0\n", b"\0\n"; "input output settings binary input")]
+-    #[test_case(TargetEolStrategy {
+-          eol_conversion_mode: EolConversionMode::Input,
+-      }, &[0; 20 << 10], &[0; 20 << 10]; "input output settings long binary input")]
++    #[test_case(EolConversionMode::None, b"\n", b"\n"; "none settings")]
++    #[test_case(EolConversionMode::Input, b"\n", b"\n"; "input settings")]
++    #[test_case(EolConversionMode::InputOutput, b"\n", b"\r\n"; "input output settings text input")]
++    #[test_case(
++        EolConversionMode::InputOutput,
++        b"\0\n",
++        b"\0\n";
++        "input output settings binary input"
++    )]
++    #[test_case(
++        EolConversionMode::Input,
++        &[0; 20 << 10],
++        &[0; 20 << 10];
++        "input output settings long binary input"
++    )]
+     async fn test_eol_strategy_convert_eol_for_update(
+-        strategy: TargetEolStrategy,
++        eol_conversion_mode: EolConversionMode,
+         contents: &[u8],
+         expected_output: &[u8],
+     ) {
++        let settings = EolConversionSettings {
++            use_git_attributes: false,
++            default_eol_attributes: EolConversionMode::None,
++            eol_conversion_mode,
++        };
++        let strategy = TargetEolStrategy::new(settings);
+         let mut actual_output = vec![];
+         strategy
+-            .convert_eol_for_update(contents)
++            .convert_eol_for_update(contents, async || panic!("should not read gitattributes"))
+             .await
+             .unwrap()
+             .read_to_end(&mut actual_output)
+@@ -361,4 +664,1330 @@ mod tests {
+             .unwrap();
+         assert_eq!(actual_output, expected_output);
+     }
++
++    #[tokio::main(flavor = "current_thread")]
++    #[test_matrix(
++        [EolConversionMode::None, EolConversionMode::Input, EolConversionMode::InputOutput],
++        [EolConversionMode::None, EolConversionMode::Input, EolConversionMode::InputOutput],
++        [b"\0", b"a\r\n", b"a\n"]
++    )]
++    async fn test_eol_gitattr_not_used(
++        default_eol_attributes: EolConversionMode,
++        eol_conversion_mode: EolConversionMode,
++        contents: &[u8],
++    ) {
++        let settings = EolConversionSettings {
++            use_git_attributes: false,
++            default_eol_attributes,
++            eol_conversion_mode,
++        };
++        let strategy = TargetEolStrategy::new(settings);
++        let mut output = vec![];
++        strategy
++            .convert_eol_for_update(contents, async || panic!("should not read gitattributes"))
++            .await
++            .unwrap()
++            .read_to_end(&mut output)
++            .await
++            .unwrap();
++        let mut output = vec![];
++        strategy
++            .convert_eol_for_snapshot(contents, async || panic!("should not read gitattributes"))
++            .await
++            .unwrap()
++            .read_to_end(&mut output)
++            .await
++            .unwrap();
++    }
++
++    #[tokio::main(flavor = "current_thread")]
++    #[test_matrix(
++        State::Set,
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"lf".to_vec()),
++            State::Value(b"crlf".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [(b"\0a\r\n", b"\0a\n"), (b"a\r\n", b"a\n")];
++        "text set"
++    )]
++    #[test_matrix(
++        State::Value(b"auto".to_vec()),
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"lf".to_vec()),
++            State::Value(b"crlf".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [(b"a\r\n", b"a\n")];
++        "text=auto text contents"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Value(b"lf".to_vec()),
++            State::Value(b"crlf".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [(b"\0a\r\n", b"\0a\n"), (b"a\r\n", b"a\n")];
++        "!text eol=lf or eol=crlf"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [(b"\0a\r\n", b"\0a\n"), (b"a\r\n", b"a\n")];
++        "eol=crlf or eol=input"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [(b"a\r\n", b"a\n")];
++        "eol-conversion is input or input-output"
++    )]
++    async fn test_eol_snapshot_should_convert_eol(
++        text: State,
++        eol: State,
++        crlf: State,
++        default_eol_attributes: EolConversionMode,
++        eol_conversion_mode: EolConversionMode,
++        (contents, expect): (&[u8], &[u8]),
++    ) {
++        let settings = EolConversionSettings {
++            use_git_attributes: true,
++            default_eol_attributes,
++            eol_conversion_mode,
++        };
++        let strategy = TargetEolStrategy::new(settings);
++        let mut output = vec![];
++        strategy
++            .convert_eol_for_snapshot(contents, async || Ok(EolGitAttributes { eol, text, crlf }))
++            .await
++            .unwrap()
++            .read_to_end(&mut output)
++            .await
++            .unwrap();
++        assert_eq!(output, expect);
++    }
++
++    #[tokio::main(flavor = "current_thread")]
++    #[test_matrix(
++        State::Value(b"auto".to_vec()),
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"lf".to_vec()),
++            State::Value(b"crlf".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        b"\0a\r\n";
++        "text=auto binary contents"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        b"\0a\r\n";
++        "eol-conversion is input or input-output binary contents"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        State::Unset,
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [b"\0a\r\n", b"a\r\n"];
++        "-crlf"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        EolConversionMode::None,
++        [b"\0a\r\n", b"a\r\n"];
++        "eol-conversion=none"
++    )]
++    async fn test_eol_snapshot_should_not_convert_eol(
++        text: State,
++        eol: State,
++        crlf: State,
++        default_eol_attributes: EolConversionMode,
++        eol_conversion_mode: EolConversionMode,
++        contents: &[u8],
++    ) {
++        let settings = EolConversionSettings {
++            use_git_attributes: true,
++            default_eol_attributes,
++            eol_conversion_mode,
++        };
++        let strategy = TargetEolStrategy::new(settings);
++        let mut output = vec![];
++        strategy
++            .convert_eol_for_snapshot(contents, async || Ok(EolGitAttributes { eol, text, crlf }))
++            .await
++            .unwrap()
++            .read_to_end(&mut output)
++            .await
++            .unwrap();
++        assert_eq!(output, contents);
++    }
++
++    #[tokio::main(flavor = "current_thread")]
++    #[test_matrix(
++        [
++            State::Set,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        State::Value(b"crlf".to_vec()),
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [(b"\0a\n", b"\0a\r\n"), (b"a\n", b"a\r\n")];
++        "eol=crlf"
++    )]
++    #[test_matrix(
++        State::Set,
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        EolConversionMode::InputOutput,
++        EolConversionMode::None,
++        [(b"\0a\n", b"\0a\r\n"), (b"a\n", b"a\r\n")];
++        "text set gitattributes-default-eol=input-output"
++    )]
++    #[test_matrix(
++        State::Set,
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        EolConversionMode::InputOutput,
++        [(b"\0a\n", b"\0a\r\n"), (b"a\n", b"a\r\n")];
++        "text set eol-conversion=input-output"
++    )]
++    #[test_matrix(
++        State::Value(b"auto".to_vec()),
++        State::Value(b"crlf".to_vec()),
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [(b"a\n", b"a\r\n")];
++        "text=auto eol=crlf text contents"
++    )]
++    #[test_matrix(
++        State::Value(b"auto".to_vec()),
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        EolConversionMode::InputOutput,
++        EolConversionMode::None,
++        [(b"a\n", b"a\r\n")];
++        "text=auto gitattributes-default-eol=input-output text contents"
++    )]
++    #[test_matrix(
++        State::Value(b"auto".to_vec()),
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        EolConversionMode::InputOutput,
++        [(b"a\n", b"a\r\n")];
++        "text=auto eol-conversion=input-output text contents"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        State::Set,
++        EolConversionMode::InputOutput,
++        EolConversionMode::None,
++        [(b"\0a\n", b"\0a\r\n"), (b"a\n", b"a\r\n")];
++        "crlf set gitattributes-default-eol=input-output"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        State::Set,
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        EolConversionMode::InputOutput,
++        [(b"\0a\n", b"\0a\r\n"), (b"a\n", b"a\r\n")];
++        "crlf set eol-conversion=input-output"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        EolConversionMode::InputOutput,
++        [(b"a\n", b"a\r\n")];
++        "eol-conversion=input-output text contents"
++    )]
++    async fn test_eol_update_should_convert_eol(
++        text: State,
++        eol: State,
++        crlf: State,
++        default_eol_attributes: EolConversionMode,
++        eol_conversion_mode: EolConversionMode,
++        (contents, expect): (&[u8], &[u8]),
++    ) {
++        let settings = EolConversionSettings {
++            use_git_attributes: true,
++            default_eol_attributes,
++            eol_conversion_mode,
++        };
++        let strategy = TargetEolStrategy::new(settings);
++        let mut output = vec![];
++        strategy
++            .convert_eol_for_update(contents, async || Ok(EolGitAttributes { eol, text, crlf }))
++            .await
++            .unwrap()
++            .read_to_end(&mut output)
++            .await
++            .unwrap();
++        assert_eq!(output, expect);
++    }
++
++    #[tokio::main(flavor = "current_thread")]
++    #[test_matrix(
++        [
++            State::Set,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"auto".to_vec()),
++        ],
++        State::Value(b"lf".to_vec()),
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [b"a\n", b"\0a\n"];
++        "eol=lf"
++    )]
++    #[test_matrix(
++        [
++            State::Set,
++            State::Value(b"auto".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        EolConversionMode::Input,
++        EolConversionMode::None,
++        [b"a\n", b"\0a\n"];
++        "gitattributes-default-eol=input"
++    )]
++    #[test_matrix(
++        [
++            State::Set,
++            State::Value(b"auto".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        EolConversionMode::Input,
++        [b"a\n", b"\0a\n"];
++        "eol-conversion=input"
++    )]
++    #[test_matrix(
++        State::Unset,
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"lf".to_vec()),
++            State::Value(b"crlf".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [b"a\n", b"\0a\n"];
++        "-text"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Unset,
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [b"a\n", b"\0a\n"];
++        "crlf=input or -crlf"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++        ],
++        [b"a\n", b"\0a\n"];
++        "eol-conversion is none or input"
++    )]
++    #[test_matrix(
++        State::Value(b"auto".to_vec()),
++        State::Value(b"crlf".to_vec()),
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        b"\0a\n";
++        "text=auto eol=crlf binary contents"
++    )]
++    #[test_matrix(
++        State::Value(b"auto".to_vec()),
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::InputOutput,
++        ],
++        EolConversionMode::None,
++        b"\0a\n";
++        "text=auto gitattributes-default-eol is none or input-output binary contents"
++    )]
++    #[test_matrix(
++        State::Value(b"auto".to_vec()),
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput,
++        ],
++        EolConversionMode::InputOutput,
++        b"\0a\n";
++        "text=auto eol-conversion=input-ouput binary contents"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput,
++        ],
++        EolConversionMode::InputOutput,
++        b"\0a\n";
++        "eol-conversion=input-ouput binary contents"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        State::Set,
++        EolConversionMode::Input,
++        EolConversionMode::None,
++        [b"a\n", b"\0a\n"];
++        "crlf set gitattributes-default-eol=input"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        State::Set,
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput,
++        ],
++        EolConversionMode::Input,
++        [b"a\n", b"\0a\n"];
++        "crlf set eol-conversion=input"
++    )]
++    async fn test_eol_update_should_not_convert_eol(
++        text: State,
++        eol: State,
++        crlf: State,
++        default_eol_attributes: EolConversionMode,
++        eol_conversion_mode: EolConversionMode,
++        contents: &[u8],
++    ) {
++        let settings = EolConversionSettings {
++            use_git_attributes: true,
++            default_eol_attributes,
++            eol_conversion_mode,
++        };
++        let strategy = TargetEolStrategy::new(settings);
++        let mut output = vec![];
++        strategy
++            .convert_eol_for_update(contents, async || Ok(EolGitAttributes { eol, text, crlf }))
++            .await
++            .unwrap()
++            .read_to_end(&mut output)
++            .await
++            .unwrap();
++        assert_eq!(output, contents);
++    }
++
++    #[cfg(windows)]
++    const NATIVE_EOL: &str = "\r\n";
++    #[cfg(not(windows))]
++    const NATIVE_EOL: &str = "\n";
++
++    #[tokio::main(flavor = "current_thread")]
++    #[test_matrix(
++        State::Value(b"auto".to_vec()),
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [(b"a\n", format!("a{NATIVE_EOL}"))];
++        "text=auto"
++    )]
++    #[test_matrix(
++        State::Set,
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [(b"a\n", format!("a{NATIVE_EOL}")), (b"\0a\n", format!("\0a{NATIVE_EOL}"))];
++        "text is set"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        State::Set,
++        [(b"a\n", format!("a{NATIVE_EOL}")), (b"\0a\n", format!("\0a{NATIVE_EOL}"))];
++        "crlf is set"
++    )]
++    async fn test_eol_update_eol_conversion_platform_specific(
++        text: State,
++        eol: State,
++        crlf: State,
++        (contents, expect): (&[u8], String),
++    ) {
++        let settings = EolConversionSettings {
++            use_git_attributes: true,
++            default_eol_attributes: EolConversionMode::None,
++            eol_conversion_mode: EolConversionMode::None,
++        };
++        let strategy = TargetEolStrategy::new(settings);
++        let mut output = vec![];
++        strategy
++            .convert_eol_for_update(contents, async || Ok(EolGitAttributes { eol, text, crlf }))
++            .await
++            .unwrap()
++            .read_to_end(&mut output)
++            .await
++            .unwrap();
++        assert_eq!(output, expect.as_bytes());
++    }
++
++    struct UnreachableReader;
++
++    impl AsyncRead for UnreachableReader {
++        fn poll_read(
++            self: Pin<&mut Self>,
++            _cx: &mut std::task::Context<'_>,
++            _buf: &mut [u8],
++        ) -> Poll<std::io::Result<usize>> {
++            unreachable!()
++        }
++    }
++
++    #[cfg(not(windows))]
++    #[tokio::main(flavor = "current_thread")]
++    #[test_matrix(
++        State::Set,
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ];
++        "text is set"
++    )]
++    #[test_matrix(
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        State::Set;
++        "crlf is set"
++    )]
++    async fn test_eol_update_wont_read_platform_specific(text: State, eol: State, crlf: State) {
++        let settings = EolConversionSettings {
++            use_git_attributes: true,
++            default_eol_attributes: EolConversionMode::None,
++            eol_conversion_mode: EolConversionMode::None,
++        };
++        let strategy = TargetEolStrategy::new(settings);
++        strategy
++            .convert_eol_for_update(UnreachableReader, async || {
++                Ok(EolGitAttributes { eol, text, crlf })
++            })
++            .await
++            .unwrap();
++    }
++
++    async fn convert_eol_for_snapshot<'a>(
++        target_eol_strategy: &'a TargetEolStrategy,
++        contents: &'a mut (dyn AsyncRead + Send + Unpin),
++        git_attributes: EolGitAttributes,
++    ) -> Result<Box<dyn AsyncRead + Send + Unpin + 'a>, BoxError> {
++        target_eol_strategy
++            .convert_eol_for_snapshot(contents, async || Ok(git_attributes))
++            .await
++    }
++
++    async fn convert_eol_for_update<'a>(
++        target_eol_strategy: &'a TargetEolStrategy,
++        contents: &'a mut (dyn AsyncRead + Send + Unpin),
++        git_attributes: EolGitAttributes,
++    ) -> Result<Box<dyn AsyncRead + Send + Unpin + 'a>, BoxError> {
++        target_eol_strategy
++            .convert_eol_for_update(contents, async || Ok(git_attributes))
++            .await
++    }
++
++    #[tokio::main(flavor = "current_thread")]
++    #[test_matrix(
++        [
++            convert_eol_for_snapshot,
++            convert_eol_for_update,
++        ],
++        State::Unset,
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"lf".to_vec()),
++            State::Value(b"crlf".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ];
++        "-text"
++    )]
++    #[test_matrix(
++        [
++            convert_eol_for_snapshot,
++            convert_eol_for_update,
++        ],
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        State::Unset,
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ];
++        "-crlf"
++    )]
++    #[test_matrix(
++        [
++            convert_eol_for_snapshot,
++            convert_eol_for_update,
++        ],
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        EolConversionMode::None;
++        "eol-conversion=none"
++    )]
++    #[test_matrix(
++        convert_eol_for_update,
++        [
++            State::Set,
++            State::Value(b"auto".to_vec()),
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        State::Value(b"lf".to_vec()),
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput
++        ];
++        "eol=lf on update"
++    )]
++    #[test_matrix(
++        convert_eol_for_update,
++        [
++            State::Set,
++            State::Value(b"auto".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        EolConversionMode::Input,
++        EolConversionMode::None;
++        "gitattributes-default-eol=input on update"
++    )]
++    #[test_matrix(
++        convert_eol_for_update,
++        [
++            State::Set,
++            State::Value(b"auto".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++            State::Value(b"input".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput,
++        ],
++        EolConversionMode::Input;
++        "text set or text=auto eol-conversion=input on update"
++    )]
++    #[test_matrix(
++        convert_eol_for_update,
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        State::Value(b"input".to_vec()),
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput,
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput,
++        ];
++        "crlf=input on update"
++    )]
++    #[test_matrix(
++        convert_eol_for_update,
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput,
++        ],
++        EolConversionMode::Input;
++        "not gitattr eol-conversion=input on update"
++    )]
++    #[test_matrix(
++        convert_eol_for_update,
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        State::Set,
++        EolConversionMode::Input,
++        EolConversionMode::None;
++        "crlf set gitattributes-default-eol=input on update"
++    )]
++    #[test_matrix(
++        convert_eol_for_update,
++        [
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        [
++            State::Set,
++            State::Unset,
++            State::Unspecified,
++            State::Value(b"wrong_value".to_vec()),
++        ],
++        State::Set,
++        [
++            EolConversionMode::None,
++            EolConversionMode::Input,
++            EolConversionMode::InputOutput,
++        ],
++        EolConversionMode::Input;
++        "crlf set eol-conversion=input on update"
++    )]
++    async fn test_eol_wont_read(
++        operation: impl for<'a> AsyncFn(
++            &'a TargetEolStrategy,
++            &'a mut (dyn AsyncRead + Send + Unpin),
++            EolGitAttributes,
++        )
++            -> Result<Box<dyn AsyncRead + Send + Unpin + 'a>, BoxError>,
++        text: State,
++        eol: State,
++        crlf: State,
++        default_eol_attributes: EolConversionMode,
++        eol_conversion_mode: EolConversionMode,
++    ) {
++        let settings = EolConversionSettings {
++            use_git_attributes: true,
++            default_eol_attributes,
++            eol_conversion_mode,
++        };
++        let strategy = TargetEolStrategy::new(settings);
++        operation(
++            &strategy,
++            &mut UnreachableReader,
++            EolGitAttributes { eol, text, crlf },
++        )
++        .await
++        .unwrap();
++    }
+ }
+diff --git a/lib/src/gitattributes.rs b/lib/src/gitattributes.rs
+new file mode 100644
+index 0000000..5b9d3d4
+--- /dev/null
++++ b/lib/src/gitattributes.rs
+@@ -0,0 +1,1176 @@
++// Copyright 2025 The Jujutsu Authors
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++// https://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++//! Utilities to read the `gitattributes` files and match against them.
++//!
++//! [`GitAttributes`] provides the key functionality to cache, query the states
++//! of gitattributes associated to a file, and read and parse the
++//! `gitattributes` files lazily. [`GitAttributes::search`] is the query
++//! interface.
++//!
++//! [`FileLoader`] a trait that encapsulates the implementation details on how
++//! to read `gitattributes` files given paths, either from the
++//! [`Store`](crate::store::Store) or from the file system. [`TreeFileLoader`]
++//! and [`DiskFileLoader`] are 2 implementations. [`FileLoader`]s are used to
++//! initialize [`GitAttributes`].
++
++use std::collections::HashMap;
++use std::collections::hash_map::Entry;
++use std::fmt::Debug;
++use std::fmt::Formatter;
++use std::fs;
++use std::io::ErrorKind;
++use std::path::PathBuf;
++use std::sync::Arc;
++use std::sync::Mutex;
++
++use async_trait::async_trait;
++use bstr::BStr;
++use futures::AsyncRead;
++use futures::AsyncReadExt as _;
++use futures::io::AllowStdIo;
++use gix_attributes::glob::pattern::Case;
++use gix_attributes::search::Outcome;
++use tokio::sync::OnceCell;
++
++use crate::backend::MergedTreeValueExt;
++use crate::backend::TreeValue;
++use crate::merge::SameChange;
++use crate::merged_tree::MergedTree;
++use crate::repo_path::RepoPath;
++use crate::repo_path::RepoPathBuf;
++use crate::repo_path::RepoPathComponent;
++
++/// The state an attribute can be in.
++///
++/// This type is directly from the [state defined] in the git attributes
++/// document. Note that this doesn't contain the name.
++///
++/// [state defined]: https://git-scm.com/docs/gitattributes#_description
++#[derive(PartialEq, Eq, Clone)]
++pub enum State {
++    /// The path has the attribute with special value "true"; this is specified
++    /// by listing only the name of the attribute in the attribute list.
++    ///
++    /// For example, with the below `gitattributes` file, the `text` attribute
++    /// is in the set state for the `a.txt` file.
++    ///
++    /// ```gitattributes
++    /// a.txt text
++    /// ```
++    Set,
++    /// The path has the attribute with special value "false"; this is specified
++    /// by listing the name of the attribute prefixed with a dash `-` in the
++    /// attribute list.
++    ///
++    /// For example, with the below `gitattributes` file, the `text` attribute
++    /// is in the unset state for the `a.png` file.
++    ///
++    /// ```gitattributes
++    /// a.png -text
++    /// ```
++    Unset,
++    /// Set to a value. The path has the attribute with specified string value;
++    /// this is specified by listing the name of the attribute followed by an
++    /// equal sign `=` and its value in the attribute list.
++    ///
++    /// For example, with the below `gitattributes` file, the `eol` attribute is
++    /// in the set to `"crlf"` state for the `a.bat` file.
++    ///
++    /// ```gitattributes
++    /// a.bat eol=crlf
++    /// ```
++    Value(Vec<u8>),
++    /// No pattern matches the path, and nothing says if the path has or does
++    /// not have the attribute, the attribute for the path is said to be
++    /// Unspecified. Listing the name of the attribute prefixed with an
++    /// exclamation point `!` also makes that attribute unspecified.
++    ///
++    /// For example, with the below `gitattributes` file, the `text` attribute
++    /// is in the unspecified state for the `a.txt` file.
++    ///
++    /// ```gitattributes
++    /// a.txt !text
++    /// ```
++    Unspecified,
++}
++
++impl Debug for State {
++    /// Implement [`Debug::fmt`] manually, so that [`State::Value`] prints as a
++    /// byte string instead of a list of numbers for readability.
++    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
++        use State::*;
++        match self {
++            Set => f.write_str("State::Set"),
++            Unset => f.write_str("State::Unset"),
++            Value(value) => f
++                .debug_tuple("State::Value")
++                .field(&BStr::new(&value))
++                .finish(),
++            Unspecified => f.write_str("State::Unspecified"),
++        }
++    }
++}
++
++impl From<gix_attributes::StateRef<'_>> for State {
++    fn from(value: gix_attributes::StateRef) -> Self {
++        use gix_attributes::StateRef::*;
++        match value {
++            Set => Self::Set,
++            Unset => Self::Unset,
++            Value(value) => Self::Value(value.as_bstr().to_vec()),
++            Unspecified => Self::Unspecified,
++        }
++    }
++}
++
++/// The error type for `gitattributes` operations.
++///
++/// Errors mostly originate from reading from the store, reading from the file
++/// system, and path conversion.
++#[derive(Debug, thiserror::Error)]
++#[error("{message}")]
++pub struct GitAttributesError {
++    message: String,
++    #[source]
++    source: Box<dyn std::error::Error + Send + Sync>,
++}
++
++type Result<T> = std::result::Result<T, GitAttributesError>;
++
++/// An abstraction over the operation of reading the gitattributes file contents
++/// from the [`Store`](crate::store::Store) or from the file system.
++///
++/// The [`Debug`] trait requirement is used to format error message when error
++/// happens. This makes it easier to debug which [`FileLoader`] fails from the
++/// log or the error message.
++#[async_trait]
++pub trait FileLoader: Debug + Send + Sync {
++    /// Given a path to a `gitattributes` file, return the contents of that
++    /// file.
++    ///
++    /// This function will return the contents of a `gitattributes` file. If the
++    /// file doesn't exist or the path points to an entry that is not a
++    /// file(e.g., a folder), this method must return
++    /// [`Ok(None)`](std::result::Result::Ok), so that the caller knows the file
++    /// is missing instead of an IO error that can't be recovered. According to
++    /// [the `gitattributes` document], the method should not follow symbolic
++    /// links.
++    ///
++    /// # Errors
++    ///
++    /// If the underlying [`Store`](crate::store::Store) operation or the file
++    /// system IO fails, an error is returned.
++    ///
++    /// It is **not** considered an error if `path` points to nothing or doesn't
++    /// point to a file.
++    ///
++    /// [the `gitattributes` document]: https://git-scm.com/docs/gitattributes#_notes
++    async fn load(&self, path: &RepoPath) -> Result<Option<Box<dyn AsyncRead + Send + Unpin>>>;
++}
++
++/// An abstraction over the operation of reading the gitattributes file contents
++/// from the [`Store`](crate::store::Store).
++pub struct TreeFileLoader {
++    tree: MergedTree,
++}
++
++impl TreeFileLoader {
++    /// Create a [`TreeFileLoader`] from a given [`MergedTree`].
++    ///
++    /// [`TreeFileLoader::load`] reads the contents of the `gitattributes` file
++    /// from the `tree`.
++    pub fn new(tree: MergedTree) -> Self {
++        Self { tree }
++    }
++}
++
++#[async_trait]
++impl FileLoader for TreeFileLoader {
++    /// Given a path to a `gitattributes` file, return the contents from the
++    /// [`MergedTree`] passed in in [`TreeFileLoader::new`].
++    ///
++    /// If there are conflicts on the `gitattributes` file, we always resolve
++    /// the conflict before returning the contents.
++    async fn load(&self, path: &RepoPath) -> Result<Option<Box<dyn AsyncRead + Send + Unpin>>> {
++        let tree_values =
++            self.tree
++                .path_value(path)
++                .await
++                .map_err(|source| GitAttributesError {
++                    message: format!(
++                        "Failed to obtain the tree value at the path {}",
++                        path.as_internal_file_string()
++                    ),
++                    source: source.into(),
++                })?;
++        let maybe_file_merge = tree_values.to_file_merge();
++        let file_id = match maybe_file_merge
++            .as_ref()
++            .and_then(|files| files.resolve_trivial(SameChange::Accept))
++        {
++            // Trivially resolve to a file.
++            Some(Some(file_id)) => file_id,
++            // Trivially resolve to an absent entry: files.resolve_trivial() returns Some(None).
++            Some(None) => return Ok(None),
++            // The rest case. The merge can be trivially resolved neither to a file nor an absent
++            // entry. Particularly, we don't follow the symbolic link as required by the
++            // `gitattributes` document.
++            None => {
++                // Let's just find the first file entry and use it for simplicity. We can
++                // improve the conflict case better if needed.
++                let Some(id) = tree_values.iter().find_map(|tree_value| {
++                    let Some(TreeValue::File { id, .. }) = tree_value else {
++                        return None;
++                    };
++                    Some(id)
++                }) else {
++                    // None of the conflict sides are files.
++                    return Ok(None);
++                };
++                id
++            }
++        };
++        let file = self
++            .tree
++            .store()
++            .read_file(path, file_id)
++            .await
++            .map_err(|source| GitAttributesError {
++                message: format!(
++                    "Failed to read the file from the store at the path {}",
++                    path.as_internal_file_string()
++                ),
++                source: source.into(),
++            })?;
++        Ok(Some(Box::new(file)))
++    }
++}
++
++impl Debug for TreeFileLoader {
++    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
++        f.debug_tuple("TreeFileLoader").field(&self.tree).finish()
++    }
++}
++
++/// An abstraction over the operation of reading the gitattributes file contents
++/// from the file system.
++pub struct DiskFileLoader {
++    repo_root: PathBuf,
++}
++
++impl DiskFileLoader {
++    /// Create a [`DiskFileLoader`] from a given project root path.
++    ///
++    /// `repo_root` is used in [`DiskFileLoader::load`] to resolve a
++    /// [`RepoPath`] to a file system path.
++    pub fn new(repo_root: PathBuf) -> Self {
++        Self { repo_root }
++    }
++}
++
++#[async_trait]
++impl FileLoader for DiskFileLoader {
++    async fn load(&self, path: &RepoPath) -> Result<Option<Box<dyn AsyncRead + Send + Unpin>>> {
++        let path = path
++            .to_fs_path(&self.repo_root)
++            .map_err(|source| GitAttributesError {
++                message: format!(
++                    "Failed to convert the input path({}) to a filesystem path",
++                    path.as_internal_file_string()
++                ),
++                source: source.into(),
++            })?;
++        // According to the `gitattributes` document, we shouldn't follow the symbolic
++        // link.
++        let metadata = match fs::symlink_metadata(&path) {
++            Ok(metadata) => metadata,
++            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
++            Err(err) => {
++                return Err(GitAttributesError {
++                    message: format!("Failed to obtain the file metadata of {}", path.display()),
++                    source: err.into(),
++                });
++            }
++        };
++        if !metadata.is_file() {
++            return Ok(None);
++        }
++        let file = match fs::File::open(&path) {
++            Ok(file) => file,
++            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
++            Err(err) => {
++                return Err(GitAttributesError {
++                    message: format!("Failed to open the file at {}", path.display()),
++                    source: err.into(),
++                });
++            }
++        };
++        Ok(Some(Box::new(AllowStdIo::new(file)) as Box<_>))
++    }
++}
++
++impl Debug for DiskFileLoader {
++    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
++        f.debug_tuple("DiskFileLoader")
++            .field(&format_args!("{}", self.repo_root.display()))
++            .finish()
++    }
++}
++
++#[derive(Clone)]
++struct GitAttributesNode {
++    search: gix_attributes::Search,
++    metadata_collection: gix_attributes::search::MetadataCollection,
++}
++
++/// A cached, lazy query interface to query the states of given git attributes
++/// associated to a file.
++pub struct GitAttributes {
++    /// The key is the path of a directory, the value is the associated
++    /// [`GitAttributesNode`].
++    ///
++    /// The [`GitAttributesNode`] of a folder has direct influence on all the
++    /// files under that folder, and indirect influence on files in its
++    /// descendant folder. The attribute states of files under the same folder,
++    /// e.g. `foo/bar1.txt`, `foo/bar2.txt`, are decided by the same
++    /// [`GitAttributesNode`] object, and the cache key is the path to the
++    /// folder, e.g., `foo`. This allows files under the same folder properly
++    /// share the same cache entry.
++    node_cache: Mutex<HashMap<RepoPathBuf, Arc<OnceCell<Arc<GitAttributesNode>>>>>,
++    file_loaders: Box<[Arc<dyn FileLoader>]>,
++}
++
++impl GitAttributes {
++    async fn initialize_node(&self, path: &RepoPath) -> Result<Arc<GitAttributesNode>> {
++        let parent = path.parent();
++        let base_objects = match parent {
++            Some(parent_path) => Box::pin(self.get_node(parent_path))
++                .await
++                .map_err(|source| GitAttributesError {
++                    message: format!(
++                        "Failed to obtain the parent of {}",
++                        path.to_internal_dir_string()
++                    ),
++                    source: source.into(),
++                })?,
++            None => {
++                // `path` points to the repository root.
++                let mut search = gix_attributes::Search::default();
++                let mut metadata = gix_attributes::search::MetadataCollection::default();
++                const BUILT_IN: &[u8] = b"[attr]binary -diff -merge -text";
++                search.add_patterns_buffer(BUILT_IN, "[builtin]".into(), None, &mut metadata, true);
++                Arc::new(GitAttributesNode {
++                    search,
++                    metadata_collection: metadata,
++                })
++            }
++        };
++        let gitattributes_path = path.join(RepoPathComponent::DOT_GITATTRIBUTES);
++        let mut file = None;
++        for file_loader in &self.file_loaders {
++            file = file_loader
++                .load(&gitattributes_path)
++                .await
++                .map_err(|source| GitAttributesError {
++                    message: format!(
++                        "Failed to read the .gitattributes file from {:?} at {}",
++                        file_loader,
++                        gitattributes_path.to_internal_dir_string(),
++                    ),
++                    source: source.into(),
++                })?;
++            if file.is_some() {
++                break;
++            }
++        }
++        let Some(mut file) = file else {
++            // If no `gitattributes` files exist for the current folder, we just use the
++            // same Search object as the parent.
++            return Ok(base_objects);
++        };
++        let mut contents = vec![];
++        file.read_to_end(&mut contents)
++            .await
++            .map_err(|source| GitAttributesError {
++                message: format!(
++                    "Failed to read the contents of .gitattributes file at {}",
++                    gitattributes_path.as_internal_file_string()
++                ),
++                source: source.into(),
++            })?;
++        let mut res = GitAttributesNode::clone(&*base_objects);
++        res.search.add_patterns_buffer(
++            &contents,
++            gitattributes_path
++                .to_fs_path(&PathBuf::new())
++                .map_err(|source| GitAttributesError {
++                    message: "Failed to convert the gitattributes path from RepoPath to Path"
++                        .to_string(),
++                    source: source.into(),
++                })?,
++            // The root parameter should be `Some("")` to enable local relative search mode
++            // according to:
++            //
++            // * https://docs.rs/gix-attributes/0.26.1/gix_attributes/struct.Search.html#method.add_patterns_file
++            // * https://docs.rs/gix-glob/0.21.0/gix_glob/search/pattern/struct.List.html#method.from_bytes
++            Some(&PathBuf::new()),
++            &mut res.metadata_collection,
++            // Only allow macros for the root `gitattributes` file, i.e., path doesn't have a
++            // parent, because Git only allows macro definition in limited files:
++            //
++            // > Custom macro attributes can be defined only in top-level gitattributes files
++            // > (`$GIT_DIR/info/attributes`, the `.gitattributes` file at the top level of the
++            // > working tree, or the global or system-wide gitattributes files), not in
++            // > `.gitattributes` files in working tree subdirectories.
++            parent.is_none(),
++        );
++        Ok(Arc::new(res))
++    }
++
++    /// The only valid way to access [`Self::node_cache`].
++    async fn get_node(&self, path: &RepoPath) -> Result<Arc<GitAttributesNode>> {
++        let node = match self.node_cache.lock().unwrap().entry(path.to_owned()) {
++            Entry::Occupied(node) => node.get().clone(),
++            Entry::Vacant(node) => Arc::clone(node.insert(Arc::new(OnceCell::new()))),
++        };
++        // We perform the actual initialization without the lock held for better
++        // parallelism.
++        node.get_or_try_init(|| self.initialize_node(path))
++            .await
++            .cloned()
++    }
++
++    /// Query the states of git attributes associated to the `path`.
++    ///
++    /// If the `gitattributes` file is missing in one folder from one source,
++    /// other sources provided in [`Self::new`] as the `file_loaders` will be
++    /// used as fallbacks.
++    ///
++    /// * `path`: the path to the file whose `gitattributes` states are of
++    ///   interest. While passing in a root path won't panic, the return value
++    ///   is also unspecified.
++    /// * `attribute_names`: the names of the `gitattributes` of interest. The
++    ///   return value will only include the states of `gitattributes` mentioned
++    ///   in this list.
++    ///
++    /// Note that currently, the pattern match is performed in a case sensitive
++    /// way.
++    ///
++    /// # Return value
++    ///
++    /// In the returned [`HashMap`], the key is the name of the git attribute,
++    /// and the value is the [`State`] of that git attribute. If the `path`
++    /// doesn't match any pattern in the `gitattributes` files, the returned
++    /// [`HashMap`] still contains that entry with the [`State::Unspecified`]
++    /// value.
++    ///
++    /// # Error
++    ///
++    /// If the related `gitattributes` files are not cached, and the underlying
++    /// [`FileLoader`] fails to load the file, e.g., an I/O error, an error will
++    /// be returned.
++    pub async fn search<'a>(
++        &self,
++        path: &RepoPath,
++        attribute_names: impl AsRef<[&'a str]>,
++    ) -> Result<HashMap<String, State>> {
++        // The cache key for the GitAttributesNode object that controls `path`, is the
++        // parent of `path`.
++        let parent_path = path.parent().unwrap_or(path);
++        let node = self
++            .get_node(parent_path)
++            .await
++            .map_err(|source| GitAttributesError {
++                message: format!(
++                    "Failed to retrieve the search and metadata objects when retrieving \
++                     gitattributes objects for {}",
++                    parent_path.as_internal_file_string()
++                ),
++                source: source.into(),
++            })?;
++        let mut outcome = Outcome::default();
++        let attribute_names = attribute_names.as_ref();
++        outcome
++            .initialize_with_selection(&node.metadata_collection, attribute_names.iter().copied());
++        node.search.pattern_matching_relative_path(
++            path.as_internal_file_string().as_bytes().into(),
++            Case::Sensitive,
++            None,
++            &mut outcome,
++        );
++        let mut res = outcome
++            .iter_selected()
++            .map(|search_match| {
++                let assignment = search_match.assignment;
++                (
++                    assignment.name.as_str().to_string(),
++                    assignment.state.into(),
++                )
++            })
++            .collect::<HashMap<_, _>>();
++        for attribute_name in attribute_names {
++            // Populate the missing attributes entries with the unspecified state value.
++            let Entry::Vacant(entry) = res.entry(attribute_name.to_string()) else {
++                continue;
++            };
++            entry.insert(State::Unspecified);
++        }
++        Ok(res)
++    }
++
++    /// Create a [`GitAttributes`] instance with the given sources of
++    /// `gitattributes` files.
++    ///
++    /// [`GitAttributes`] uses [`FileLoader`]s in the `file_loaders` parameter
++    /// to obtain the contents of the `gitattributes` files. If `file_loaders`
++    /// is empty, [`Self::search`] will always return [`State::Unspecified`] for
++    /// all attributes. If there are multiple [`FileLoader`]s, when the
++    /// `gitattributes` file is missing in one [`FileLoader`], the next
++    /// [`FileLoader`] will be used as the fall-back. This makes it easier to
++    /// implement the below feature mentioned in the [gitattributes document]:
++    ///
++    /// > When the `.gitattributes` file is missing from the work tree, the path
++    /// > in the index is used as a fall-back. During checkout process,
++    /// > `.gitattributes` in the index is used and then the file in the working
++    /// > tree is used as a fall-back.
++    ///
++    /// [gitattributes document]: https://git-scm.com/docs/gitattributes#_description
++    pub fn new(file_loaders: Vec<Arc<dyn FileLoader>>) -> Self {
++        Self {
++            node_cache: Mutex::new(HashMap::default()),
++            file_loaders: file_loaders.into_boxed_slice(),
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use std::pin::Pin;
++    use std::task::Poll;
++
++    use futures::io::Cursor;
++    use gix_attributes::state::ValueRef;
++    use indoc::indoc;
++    use itertools::Itertools as _;
++    use pollster::FutureExt as _;
++    use test_case::test_case;
++    #[cfg(unix)]
++    use unix::*;
++
++    use super::*;
++    use crate::file_util::check_symlink_support;
++    use crate::file_util::symlink_file;
++
++    #[cfg(unix)]
++    mod unix {
++        pub use std::os::unix::fs::PermissionsExt;
++        pub struct Defer<'a>(Box<dyn FnMut() + 'a>);
++        impl<'a> Defer<'a> {
++            pub fn new(f: impl FnMut() + 'a) -> Self {
++                Self(Box::new(f))
++            }
++        }
++        impl Drop for Defer<'_> {
++            fn drop(&mut self) {
++                (self.0)();
++            }
++        }
++    }
++
++    type FakeFileLoader = HashMap<RepoPathBuf, std::result::Result<String, String>>;
++    #[async_trait]
++    impl FileLoader for FakeFileLoader {
++        async fn load(&self, path: &RepoPath) -> Result<Option<Box<dyn AsyncRead + Send + Unpin>>> {
++            let Some(res) = self.get(path) else {
++                return Ok(None);
++            };
++            match res.clone() {
++                Ok(contents) => Ok(Some(Box::new(Cursor::new(Vec::from(contents))) as Box<_>)),
++                Err(message) => Err(GitAttributesError {
++                    message: message.clone(),
++                    source: message.into(),
++                }),
++            }
++        }
++    }
++
++    fn repo_path(value: &str) -> RepoPathBuf {
++        RepoPathBuf::from_internal_string(value).unwrap()
++    }
++
++    #[test_case(State::Set, "Set"; "set")]
++    #[test_case(State::Unset, "Unset"; "unset")]
++    #[test_case(State::Value(b"git-lfs".to_vec()), "git-lfs"; "set to value")]
++    #[test_case(State::Unspecified, "Unspecified"; "unspecified")]
++    fn test_gitattr_state_debug(state: State, expected_substring: &str) {
++        let debug_output = format!("{state:?}");
++        assert!(
++            debug_output.contains(expected_substring),
++            "Expect string to contain {expected_substring:?}, but got: {debug_output:?}.",
++        );
++    }
++
++    #[test_case(gix_attributes::StateRef::Set, State::Set; "set")]
++    #[test_case(gix_attributes::StateRef::Unset, State::Unset; "unset")]
++    #[test_case(
++        gix_attributes::StateRef::Value(ValueRef::from_bytes(b"git-lfs")),
++        State::Value(b"git-lfs".to_vec());
++        "set to value"
++    )]
++    #[test_case(gix_attributes::StateRef::Unspecified, State::Unspecified; "unspecified")]
++    fn test_gitattr_state_from_gix_attributes_state_ref(
++        value: gix_attributes::StateRef,
++        expected: State,
++    ) {
++        assert_eq!(State::from(value), expected);
++    }
++
++    #[test]
++    fn test_gitattr_disk_file_loader_invalid_query_path() {
++        let file_loader = DiskFileLoader::new(PathBuf::from("jj"));
++        let res = file_loader.load(&repo_path("a\\b")).block_on();
++        if cfg!(windows) {
++            // a\b is probably only an invalid path on Windows.
++            assert!(
++                res.is_err(),
++                "Expect DiskFileLoader::load() to return an error with an invalid path."
++            );
++        }
++    }
++
++    #[test]
++    fn test_gitattr_disk_file_loader_should_not_follow_symlink() {
++        if !check_symlink_support().unwrap() {
++            eprintln!("Skip the test if symlink is not supported.");
++            return;
++        }
++        let tempdir = tempfile::Builder::new()
++            .prefix("jj-test-")
++            .tempdir()
++            .unwrap();
++        let root_path = tempdir.path();
++        let link_repo_path = repo_path(".gitattributes");
++        let link_path = link_repo_path.to_fs_path(root_path).unwrap();
++        let target_path = PathBuf::from("a.txt");
++        fs::write(root_path.join(&target_path), "a.txt text\n").unwrap();
++        symlink_file(target_path, link_path).unwrap();
++
++        let file_loader = DiskFileLoader::new(root_path.to_owned());
++        let res = file_loader.load(&link_repo_path).block_on().unwrap();
++        assert!(
++            res.is_none(),
++            "Expect DiskFileLoader::load to return `None` when the path is a symlink."
++        );
++    }
++
++    #[test]
++    fn test_gitattr_disk_file_loader_path_doesnt_exist() {
++        let tempdir = tempfile::Builder::new()
++            .prefix("jj-test-")
++            .tempdir()
++            .unwrap();
++        let root_path = tempdir.path();
++        let repo_path = repo_path(".gitattributes");
++        let path = repo_path.to_fs_path(root_path).unwrap();
++        assert!(!fs::exists(path).unwrap());
++
++        let file_loader = DiskFileLoader::new(root_path.to_owned());
++        let res = file_loader.load(&repo_path).block_on().unwrap();
++        assert!(
++            res.is_none(),
++            "Expect DiskFileLoader::load to return `None` when the path doesn't exist."
++        );
++    }
++
++    #[test]
++    #[cfg(unix)]
++    fn test_gitattr_disk_file_loader_path_cant_access_metadata() {
++        let tempdir = tempfile::Builder::new()
++            .prefix("jj-test-")
++            .tempdir()
++            .unwrap();
++        let root_path = tempdir.path();
++        let repo_path = repo_path("dir/.gitattributes");
++        let dir_path = root_path.join("dir");
++        fs::create_dir_all(&dir_path).unwrap();
++        let path = repo_path.to_fs_path(root_path).unwrap();
++        fs::write(&path, "a.txt text\n").unwrap();
++        let mut perm = dir_path.symlink_metadata().unwrap().permissions();
++        let old_perm = perm.clone();
++        perm.set_mode(0o000);
++        fs::set_permissions(&dir_path, perm.clone()).unwrap();
++        let defer = Defer::new(|| fs::set_permissions(&dir_path, old_perm.clone()).unwrap());
++        assert!(path.symlink_metadata().is_err());
++
++        let file_loader = DiskFileLoader::new(root_path.to_owned());
++        let res = file_loader.load(&repo_path).block_on();
++        assert!(
++            res.is_err(),
++            "Expect DiskFileLoader::load to return an error when we can't access the metadata of \
++             the path."
++        );
++        drop(defer);
++    }
++
++    #[test]
++    #[cfg(unix)]
++    fn test_gitattr_disk_file_loader_path_cant_access_file() {
++        let tempdir = tempfile::Builder::new()
++            .prefix("jj-test-")
++            .tempdir()
++            .unwrap();
++        let root_path = tempdir.path();
++        let repo_path = repo_path(".gitattributes");
++        let path = repo_path.to_fs_path(root_path).unwrap();
++        fs::write(&path, "a.txt text\n").unwrap();
++        let mut perm = path.symlink_metadata().unwrap().permissions();
++        let old_perm = perm.clone();
++        perm.set_mode(0o000);
++        fs::set_permissions(&path, perm.clone()).unwrap();
++        let defer = Defer::new(|| fs::set_permissions(&path, old_perm.clone()).unwrap());
++        assert!(fs::read(&path).is_err());
++
++        let file_loader = DiskFileLoader::new(root_path.to_owned());
++        let res = file_loader.load(&repo_path).block_on();
++        assert!(
++            res.is_err(),
++            "Expect DiskFileLoader::load to return an error when we can't access the file."
++        );
++        drop(defer);
++    }
++
++    #[test]
++    fn test_gitattr_disk_file_loader_load_file_contents() {
++        let tempdir = tempfile::Builder::new()
++            .prefix("jj-test-")
++            .tempdir()
++            .unwrap();
++        let contents = "a.txt text\n";
++        let root_path = tempdir.path();
++        let repo_path = repo_path(".gitattributes");
++        let path = repo_path.to_fs_path(root_path).unwrap();
++        fs::write(&path, contents).unwrap();
++
++        let file_loader = DiskFileLoader::new(root_path.to_owned());
++        let mut actual_contents = String::new();
++        file_loader
++            .load(&repo_path)
++            .block_on()
++            .unwrap()
++            .expect("the file exist")
++            .read_to_string(&mut actual_contents)
++            .block_on()
++            .unwrap();
++        assert_eq!(contents, actual_contents);
++    }
++
++    #[test]
++    fn test_gitattr_disk_file_loader_debug() {
++        let path = "jj-test/path";
++        let file_loader = DiskFileLoader::new(PathBuf::from(path));
++        let debug = format!("{file_loader:?}");
++        assert!(
++            debug.contains(path),
++            "Expect string to contain {path:?}, but got: {debug:?}.",
++        );
++    }
++
++    #[test]
++    fn test_gitattr_load_file_error() {
++        // File load failure on parent node should cover more paths.
++        let file_loader =
++            FakeFileLoader::from([(repo_path(".gitattributes"), Err("test error".to_owned()))]);
++        let git_attributes = GitAttributes::new(vec![Arc::new(file_loader)]);
++        git_attributes
++            .search(&repo_path("dir/a.txt"), &["text"])
++            .block_on()
++            .expect_err("search should fail");
++    }
++
++    #[test_case(
++        vec![Some("a.txt text\n"), Some("a.txt -text\n")] => State::Set;
++        "exist in all sources"
++    )]
++    #[test_case(
++        vec![None, Some("a.txt -text\n")] => State::Unset;
++        "missing in the primary source"
++    )]
++    #[test_case(
++        vec![Some("a.txt -text\n"), None] => State::Unset;
++        "missing in the secondary source"
++    )]
++    #[test_case(
++        vec![None, None] => State::Unspecified;
++        "missing in both sources"
++    )]
++    fn test_gitattr_fallback(contents: Vec<Option<&str>>) -> State {
++        let file_loaders = contents
++            .into_iter()
++            .map(|content| {
++                let fake_file_loader: FakeFileLoader = content
++                    .iter()
++                    .map(|content| (repo_path(".gitattributes"), Ok(content.to_string())))
++                    .collect();
++                Arc::new(fake_file_loader) as Arc<_>
++            })
++            .collect_vec();
++        let git_attributes = GitAttributes::new(file_loaders);
++        git_attributes
++            .search(&repo_path("a.txt"), &["text"])
++            .block_on()
++            .unwrap()
++            .get("text")
++            .unwrap()
++            .clone()
++    }
++
++    #[test]
++    fn test_gitattr_file_read_fail() {
++        struct ErrorReader;
++        impl AsyncRead for ErrorReader {
++            fn poll_read(
++                self: Pin<&mut Self>,
++                _cx: &mut std::task::Context<'_>,
++                _buf: &mut [u8],
++            ) -> Poll<std::io::Result<usize>> {
++                Poll::Ready(Err(std::io::Error::other("test error")))
++            }
++        }
++        #[derive(Debug)]
++        struct TestFileLoader;
++        #[async_trait]
++        impl FileLoader for TestFileLoader {
++            async fn load(
++                &self,
++                _: &RepoPath,
++            ) -> Result<Option<Box<dyn AsyncRead + Send + Unpin>>> {
++                Ok(Some(Box::new(ErrorReader)))
++            }
++        }
++
++        let gitattributes = GitAttributes::new(vec![Arc::new(TestFileLoader)]);
++        gitattributes
++            .search(&repo_path("a.txt"), &["text"])
++            .block_on()
++            .expect_err("search should fail");
++    }
++
++    #[test]
++    fn test_gitattr_invalid_path() {
++        let file_loader = FakeFileLoader::from([(
++            repo_path("a/./b/.gitattributes"),
++            Ok("a.txt text".to_owned()),
++        )]);
++        let gitattributes = GitAttributes::new(vec![Arc::new(file_loader)]);
++        gitattributes
++            .search(&repo_path("a/./b/a.txt"), &["text"])
++            .block_on()
++            .expect_err("search should fail");
++    }
++
++    type FilePath = &'static str;
++    type AttributeName = &'static str;
++    struct TestGitAttributesSearchConfig {
++        gitattributes_files: Vec<(FilePath, &'static str)>,
++        expected_queries: Vec<(AttributeName, Vec<(AttributeName, State)>)>,
++    }
++
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![(
++                ".gitattributes",
++                indoc! {"
++                    a.txt text
++                    a.png -text
++                "},
++            )],
++            expected_queries: vec![
++                ("a.txt", vec![("text", State::Set)]),
++                ("a.png", vec![("text", State::Unset)]),
++            ],
++        };
++        "cached gitattributes file"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![(
++                ".gitattributes",
++                indoc!{"
++                    [attr]test_macro text
++                    a.txt test_macro
++                "},
++            )],
++            expected_queries: vec![("a.txt", vec![("text", State::Set)])],
++        };
++        "macro defined in root"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![(
++                "a/.gitattributes",
++                indoc!{"
++                    [attr]test_macro text
++                    a.txt test_macro
++                "},
++            )],
++            expected_queries: vec![
++                ("a/a.txt", vec![("text", State::Unspecified)])
++            ],
++        };
++        "macro defined in subdirectory"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![(".gitattributes", "a.txt text\n")],
++            expected_queries: vec![("dir/a.txt", vec![("text", State::Set)])],
++        };
++        "gitattr in parent folder"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![(".gitattributes", "a.out binary\n")],
++            expected_queries: vec![(
++                "a.out",
++                vec![
++                    ("diff", State::Unset),
++                    ("merge", State::Unset),
++                    ("text", State::Unset),
++                ]
++            )],
++        };
++        "builtin macro"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![(
++                ".gitattributes",
++                indoc!{"
++                    a.txt text
++                    B.png -text
++                "},
++            )],
++            expected_queries: vec![
++                ("a.txt", vec![("text", State::Set)]),
++                ("A.txt", vec![("text", State::Unspecified)]),
++                ("b.png", vec![("text", State::Unspecified)]),
++                ("B.png", vec![("text", State::Unset)]),
++            ],
++        };
++        "pattern should match case"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![],
++            expected_queries: vec![
++                ("a.txt", vec![("text", State::Unspecified)]),
++            ],
++        };
++        "result should contain missing attributes"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![(".gitattributes", "a.txt crlf\n")],
++            expected_queries: vec![("a.txt", vec![("crlf", State::Set)])],
++        };
++        "attr is set"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![(".gitattributes", "a.txt -crlf\n")],
++            expected_queries: vec![("a.txt", vec![("crlf", State::Unset)])],
++        };
++        "attr is unset"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![(".gitattributes", "a.txt crlf=input\n")],
++            expected_queries: vec![(
++                "a.txt",
++                vec![("crlf", State::Value(b"input".to_vec()))],
++            )],
++        };
++        "attr is set to value"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![(".gitattributes", "a.txt !crlf\n")],
++            expected_queries: vec![
++                ("a.txt", vec![("crlf", State::Unspecified)]),
++            ],
++        };
++        "attr is unspecified"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![
++                (".gitattributes", "abc foo bar baz\n"),
++                (
++                    "t/.gitattributes",
++                    indoc!{"
++                        ab* merge=filfre
++                        abc -foo -bar
++                        *.c frotz
++                    "}
++                ),
++            ],
++            expected_queries: vec![(
++                "t/abc",
++                vec![
++                    ("foo", State::Unset),
++                    ("bar", State::Unset),
++                    ("baz", State::Set),
++                    ("merge", State::Value(b"filfre".to_vec())),
++                    ("frotz", State::Unspecified),
++                ]
++            )],
++        };
++        // Modified based on https://git-scm.com/docs/gitattributes#_examples.
++        "modified gitattr doc example"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![
++                (".gitattributes", "hello.* text\n"),
++                ("a/.gitattributes", "/hello.* -text\n"),
++            ],
++            expected_queries: vec![
++                ("hello.txt", vec![("text", State::Set)]),
++                ("hello.c", vec![("text", State::Set)]),
++                ("a/hello.txt", vec![("text", State::Unset)]),
++                ("a/hello.c", vec![("text", State::Unset)]),
++                ("a/b/hello.txt", vec![("text", State::Set)]),
++                ("a/b/hello.c", vec![("text", State::Set)]),
++            ],
++        };
++        "star pattern"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![(
++                ".gitattributes",
++                indoc!{"
++                    path/ text
++                    path/** crlf
++                "},
++            )],
++            expected_queries: vec![(
++                "path/hello.txt",
++                vec![
++                    ("text", State::Unspecified),
++                    ("crlf", State::Set),
++                ]
++            )],
++        };
++        "directory pattern"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![(
++                ".gitattributes",
++                indoc!{"
++                    doc/frotz text
++                    /doc/frotz crlf
++                "},
++            )],
++            expected_queries: vec![
++                (
++                    "doc/frotz",
++                    vec![
++                        ("text", State::Set),
++                        ("crlf", State::Set),
++                    ]
++                ),
++                (
++                    "a/doc/frotz",
++                    vec![
++                        ("text", State::Unspecified),
++                        ("crlf", State::Unspecified),
++                    ]
++                ),
++            ],
++        };
++        "irrelevant leading slash in pattern"
++    )]
++    #[test_case(
++        TestGitAttributesSearchConfig {
++            gitattributes_files: vec![(".gitattributes", "foo/* text\n")],
++            expected_queries: vec![
++                ("foo/test.json", vec![("text", State::Set)]),
++                ("foo/bar", vec![("text", State::Set)]),
++                ("foo/bar/hello.c", vec![("text", State::Unspecified)]),
++            ],
++        };
++        "single asterisk won't match slash"
++    )]
++    fn test_gitattr_search(
++        TestGitAttributesSearchConfig {
++            gitattributes_files,
++            expected_queries,
++        }: TestGitAttributesSearchConfig,
++    ) {
++        let file_loader: FakeFileLoader = gitattributes_files
++            .into_iter()
++            .map(|(path, contents)| (repo_path(path), Ok(contents.to_owned())))
++            .collect();
++        let gitattributes = GitAttributes::new(vec![Arc::new(file_loader)]);
++        for (path, expected_states) in expected_queries {
++            let attributes_names = expected_states.iter().map(|(name, _)| *name).collect_vec();
++            let states = gitattributes
++                .search(&repo_path(path), &attributes_names)
++                .block_on()
++                .unwrap_or_else(|e| {
++                    let attributes_names = attributes_names.join(", ");
++                    panic!(
++                        "Failed to search the attributes {attributes_names} of the {path} file: \
++                         {e:?}"
++                    )
++                });
++            for (name, state) in expected_states {
++                let actual_state = states
++                    .get(name)
++                    .unwrap_or_else(|| {
++                        panic!(
++                            "The {name} attribute is missing in the search result of the {path} \
++                             file."
++                        )
++                    })
++                    .clone();
++                assert_eq!(
++                    actual_state, state,
++                    "Expect the state of the {name} attribute of the {path} file matches \
++                     {state:?}, but got: {actual_state:?}"
++                );
++            }
++        }
++    }
++
++    #[test]
++    fn test_gitattr_search_long_path() {
++        let dir = "a/".repeat(200);
++        let file_loader = FakeFileLoader::from([(
++            repo_path(&format!("{dir}.gitattributes")),
++            Ok("a.txt text\n".to_owned()),
++        )]);
++        let gitattributes = GitAttributes::new(vec![Arc::new(file_loader)]);
++        let state = gitattributes
++            .search(&repo_path(&format!("{dir}a.txt")), &["text"])
++            .block_on()
++            .expect("Search shouldn't fail")
++            .get("text")
++            .expect("The result should contain the text attribute state")
++            .clone();
++        assert_eq!(state, State::Set);
++    }
++}
+diff --git a/lib/src/lib.rs b/lib/src/lib.rs
+index 130ca7a..aa1d219 100644
+--- a/lib/src/lib.rs
++++ b/lib/src/lib.rs
+@@ -55,6 +55,7 @@ pub mod git;
+ pub mod git_backend;
+ #[cfg(feature = "git")]
+ mod git_subprocess;
++pub mod gitattributes;
+ pub mod gitignore;
+ pub mod gpg_signing;
+ pub use jj_core::graph;
+diff --git a/lib/src/local_working_copy.rs b/lib/src/local_working_copy.rs
+index a254834..1d7ae9f 100644
+--- a/lib/src/local_working_copy.rs
++++ b/lib/src/local_working_copy.rs
+@@ -82,6 +82,8 @@ use crate::conflicts::choose_materialized_conflict_marker_len;
+ use crate::conflicts::materialize_merge_result_to_bytes;
+ use crate::conflicts::materialize_tree_value;
+ pub use crate::eol::EolConversionMode;
++pub use crate::eol::EolConversionSettings;
++use crate::eol::GitAttributesExt as _;
+ use crate::eol::TargetEolStrategy;
+ use crate::file_util::FileIdentity;
+ use crate::file_util::check_symlink_support;
+@@ -93,6 +95,9 @@ use crate::fsmonitor::FsmonitorSettings;
+ use crate::fsmonitor::WatchmanConfig;
+ #[cfg(feature = "watchman")]
+ use crate::fsmonitor::watchman;
++use crate::gitattributes::DiskFileLoader;
++use crate::gitattributes::GitAttributes;
++use crate::gitattributes::TreeFileLoader;
+ use crate::gitignore::GitIgnoreFile;
+ use crate::lock::FileLock;
+ use crate::matchers::DifferenceMatcher;
+@@ -972,7 +977,7 @@ pub struct TreeStateSettings {
+     /// Configuring auto-converting CRLF line endings into LF when you add a
+     /// file to the backend, and vice versa when it checks out code onto your
+     /// filesystem.
+-    pub eol_conversion_mode: EolConversionMode,
++    pub eol_conversion_settings: EolConversionSettings,
+     /// Whether to ignore changes to the executable bit for files on Unix.
+     pub exec_change_setting: ExecChangeSetting,
+     /// The fsmonitor (e.g. Watchman) to use, if any.
+@@ -984,7 +989,7 @@ impl TreeStateSettings {
+     pub fn try_from_user_settings(user_settings: &UserSettings) -> Result<Self, ConfigGetError> {
+         Ok(Self {
+             conflict_marker_style: user_settings.get("ui.conflict-marker-style")?,
+-            eol_conversion_mode: EolConversionMode::try_from_settings(user_settings)?,
++            eol_conversion_settings: EolConversionSettings::try_from_settings(user_settings)?,
+             exec_change_setting: user_settings.get("working-copy.exec-bit-change")?,
+             fsmonitor_settings: FsmonitorSettings::from_settings(user_settings)?,
+         })
+@@ -1081,7 +1086,7 @@ impl TreeState {
+         state_path: PathBuf,
+         TreeStateSettings {
+             conflict_marker_style,
+-            eol_conversion_mode,
++            eol_conversion_settings,
+             exec_change_setting,
+             fsmonitor_settings,
+         }: &TreeStateSettings,
+@@ -1100,7 +1105,7 @@ impl TreeState {
+             conflict_marker_style: *conflict_marker_style,
+             exec_policy,
+             fsmonitor_settings: fsmonitor_settings.clone(),
+-            target_eol_strategy: TargetEolStrategy::new(*eol_conversion_mode),
++            target_eol_strategy: TargetEolStrategy::new(*eol_conversion_settings),
+         }
+     }
+ 
+@@ -1337,6 +1342,10 @@ impl TreeState {
+         let (untracked_paths_tx, untracked_paths_rx) = channel();
+         let (invalid_utf8_paths_tx, invalid_utf8_paths_rx) = channel();
+         let (deleted_files_tx, deleted_files_rx) = channel();
++        let git_attributes = GitAttributes::new(vec![
++            Arc::new(DiskFileLoader::new(self.working_copy_path.clone())),
++            Arc::new(TreeFileLoader::new(self.tree.clone())),
++        ]);
+ 
+         trace_span!("traverse filesystem").in_scope(|| -> Result<(), SnapshotError> {
+             let snapshotter = FileSnapshotter {
+@@ -1355,6 +1364,7 @@ impl TreeState {
+                 error: OnceLock::new(),
+                 progress: *progress,
+                 max_new_file_size: *max_new_file_size,
++                git_attributes: &git_attributes,
+             };
+             let directory_to_visit = DirectoryToVisit {
+                 dir: RepoPathBuf::root(),
+@@ -1544,6 +1554,7 @@ struct FileSnapshotter<'a> {
+     error: OnceLock<SnapshotError>,
+     progress: Option<&'a SnapshotProgress<'a>>,
+     max_new_file_size: u64,
++    git_attributes: &'a GitAttributes,
+ }
+ 
+ impl FileSnapshotter<'_> {
+@@ -2052,11 +2063,13 @@ impl FileSnapshotter<'_> {
+             })?;
+             self.tree_state
+                 .target_eol_strategy
+-                .convert_eol_for_snapshot(AllowStdIo::new(file))
++                .convert_eol_for_snapshot(AllowStdIo::new(file), || {
++                    self.git_attributes.search_eol(repo_path)
++                })
+                 .await
+                 .map_err(|err| SnapshotError::Other {
+                     message: "Failed to convert the EOL".to_string(),
+-                    err: err.into(),
++                    err,
+                 })?
+                 .read_to_end(&mut contents)
+                 .await
+@@ -2117,11 +2130,13 @@ impl FileSnapshotter<'_> {
+         let mut contents = self
+             .tree_state
+             .target_eol_strategy
+-            .convert_eol_for_snapshot(AllowStdIo::new(file))
++            .convert_eol_for_snapshot(AllowStdIo::new(file), || {
++                self.git_attributes.search_eol(path)
++            })
+             .await
+             .map_err(|err| SnapshotError::Other {
+                 message: "Failed to convert the EOL".to_string(),
+-                err: err.into(),
++                err,
+             })?;
+         Ok(self.store().write_file(path, &mut contents).await?)
+     }
+@@ -2167,10 +2182,12 @@ fn snapshot_error_for_mtime_out_of_range(err: MtimeOutOfRange, path: &Path) -> S
+ impl TreeState {
+     async fn write_file(
+         &self,
++        repo_path: &RepoPath,
+         disk_path: &Path,
+         contents: impl AsyncRead + Send + Unpin,
+         exec_bit: ExecBit,
+         apply_eol_conversion: bool,
++        git_attributes: &GitAttributes,
+     ) -> Result<FileState, CheckoutError> {
+         let mut file = File::options()
+             .write(true)
+@@ -2182,11 +2199,11 @@ impl TreeState {
+             })?;
+         let contents = if apply_eol_conversion {
+             self.target_eol_strategy
+-                .convert_eol_for_update(contents)
++                .convert_eol_for_update(contents, || git_attributes.search_eol(repo_path))
+                 .await
+                 .map_err(|err| CheckoutError::Other {
+                     message: "Failed to convert the EOL for the content".to_string(),
+-                    err: err.into(),
++                    err,
+                 })?
+         } else {
+             Box::new(contents)
+@@ -2252,17 +2269,19 @@ impl TreeState {
+ 
+     async fn write_conflict(
+         &self,
++        repo_path: &RepoPath,
+         disk_path: &Path,
+         contents: &[u8],
+         exec_bit: ExecBit,
++        git_attributes: &GitAttributes,
+     ) -> Result<FileState, CheckoutError> {
+         let contents = self
+             .target_eol_strategy
+-            .convert_eol_for_update(contents)
++            .convert_eol_for_update(contents, || git_attributes.search_eol(repo_path))
+             .await
+             .map_err(|err| CheckoutError::Other {
+                 message: "Failed to convert the EOL when writing a merge conflict".to_string(),
+-                err: err.into(),
++                err,
+             })?;
+         let mut file = OpenOptions::new()
+             .write(true)
+@@ -2340,6 +2359,10 @@ impl TreeState {
+         };
+         let mut changed_file_states = Vec::new();
+         let mut deleted_files = HashSet::new();
++        let git_attributes = GitAttributes::new(vec![
++            Arc::new(TreeFileLoader::new(new_tree.clone())),
++            Arc::new(TreeFileLoader::new(old_tree.clone())),
++        ]);
+         let mut prev_created_path: RepoPathBuf = RepoPathBuf::root();
+ 
+         let mut process_diff_entry = async |path: RepoPathBuf,
+@@ -2477,16 +2500,29 @@ impl TreeState {
+                 MaterializedTreeValue::File(file) => {
+                     let exec_bit =
+                         ExecBit::new_from_repo(file.executable, self.exec_policy, get_prev_exec);
+-                    self.write_file(&disk_path, file.reader, exec_bit, true)
+-                        .await?
++                    self.write_file(
++                        &path,
++                        &disk_path,
++                        file.reader,
++                        exec_bit,
++                        true,
++                        &git_attributes,
++                    )
++                    .await?
+                 }
+                 MaterializedTreeValue::Symlink { id: _, target } => {
+                     if self.symlink_support {
+                         self.write_symlink(&disk_path, target)?
+                     } else {
+-                        // The fake symlink file shouldn't be executable.
+-                        self.write_file(&disk_path, target.as_bytes(), ExecBit(false), false)
+-                            .await?
++                        self.write_file(
++                            &path,
++                            &disk_path,
++                            target.as_bytes(),
++                            ExecBit(false),
++                            false,
++                            &git_attributes,
++                        )
++                        .await?
+                     }
+                 }
+                 MaterializedTreeValue::GitSubmodule(_) => {
+@@ -2520,8 +2556,9 @@ impl TreeState {
+                     );
+                     let contents =
+                         materialize_merge_result_to_bytes(&file.contents, &file.labels, &options);
+-                    let mut file_state =
+-                        self.write_conflict(&disk_path, &contents, exec_bit).await?;
++                    let mut file_state = self
++                        .write_conflict(&path, &disk_path, &contents, exec_bit, &git_attributes)
++                        .await?;
+                     file_state.materialized_conflict_data = Some(MaterializedConflictData {
+                         conflict_marker_len: conflict_marker_len.try_into().unwrap_or(u32::MAX),
+                     });
+@@ -2532,8 +2569,14 @@ impl TreeState {
+                     // better than trying to describe the merge.
+                     let contents = id.describe(&labels);
+                     // Since this is a dummy file, it shouldn't be executable.
+-                    self.write_conflict(&disk_path, contents.as_bytes(), ExecBit(false))
+-                        .await?
++                    self.write_conflict(
++                        &path,
++                        &disk_path,
++                        contents.as_bytes(),
++                        ExecBit(false),
++                        &git_attributes,
++                    )
++                    .await?
+                 }
+             };
+             changed_file_states.push((path, file_state));
+diff --git a/lib/tests/runner.rs b/lib/tests/runner.rs
+index 67a3bad..f59d83d 100644
+--- a/lib/tests/runner.rs
++++ b/lib/tests/runner.rs
+@@ -19,6 +19,7 @@ mod test_evolution_predecessors;
+ mod test_fix;
+ mod test_git;
+ mod test_git_backend;
++mod test_gitattributes;
+ mod test_gpg;
+ mod test_id_prefix;
+ mod test_index;
+diff --git a/lib/tests/test_gitattributes.rs b/lib/tests/test_gitattributes.rs
+new file mode 100644
+index 0000000..d598b65
+--- /dev/null
++++ b/lib/tests/test_gitattributes.rs
+@@ -0,0 +1,230 @@
++use std::sync::Arc;
++
++use futures::AsyncReadExt as _;
++use itertools::Itertools as _;
++use jj_lib::conflict_labels::ConflictLabels;
++use jj_lib::gitattributes::FileLoader as _;
++use jj_lib::gitattributes::TreeFileLoader;
++use jj_lib::merge::Merge;
++use jj_lib::merged_tree::MergedTree;
++use jj_lib::repo::ReadonlyRepo;
++use jj_lib::repo::Repo as _;
++use jj_lib::repo_path::RepoPath;
++use jj_lib::repo_path::RepoPathComponent;
++use jj_lib::tree::Tree;
++use pollster::FutureExt as _;
++use test_case::test_case;
++use testutils::TestRepo;
++use testutils::TestTreeBuilder;
++use testutils::create_single_tree;
++use testutils::create_tree;
++use testutils::repo_path;
++
++#[test_case(|repo, path, contents| {
++    vec![create_single_tree(repo, &[(path, contents)])]
++}; "single file")]
++#[test_case(|repo, path, contents| {
++    let another_file = repo_path("a.txt");
++    assert_ne!(another_file, path);
++    vec![
++        create_single_tree(repo, &[(path, contents)]),
++        create_single_tree(repo, &[(another_file, "b\n")]),
++        create_single_tree(repo, &[(another_file, "c\n")]),
++    ]
++}; "added file untouched in 3-way merge")]
++#[test_case(|repo, path, contents| {
++    let another_file = repo_path("a.txt");
++    assert_ne!(another_file, path);
++    let old_contents = "old contents\n";
++    vec![
++        create_single_tree(repo, &[(path, contents)]),
++        create_single_tree(repo, &[
++            (path, old_contents),
++            (another_file, "b\n"),
++        ]),
++        create_single_tree(repo, &[
++            (path, old_contents),
++            (another_file, "c\n"),
++        ]),
++    ]
++}; "existing file untouched in 3-way merge")]
++#[test_case(|repo, path, contents| {
++    let another_file = repo_path("a.txt");
++    assert_ne!(another_file, path);
++    vec![
++        create_single_tree(repo, &[(another_file, "a\n")]),
++        create_single_tree(repo, &[]),
++        create_single_tree(repo, &[(path, contents)]),
++    ]
++}; "file added in 3-way merge")]
++#[test_case(|repo, path, contents| {
++    let old_contents = "old contents";
++    assert_ne!(old_contents, contents);
++    let another_file = repo_path("a.txt");
++    assert_ne!(another_file, path);
++    vec![
++        create_single_tree(repo, &[
++            (another_file, "a\n"),
++            (path, old_contents),
++        ]),
++        create_single_tree(repo, &[(path, old_contents)]),
++        create_single_tree(repo, &[(path, contents)]),
++    ]
++}; "file modified in 3-way merge")]
++fn test_gitattr_tree_file_loader_trivially_resolved_to_a_file(
++    tree_builder: impl FnOnce(&Arc<ReadonlyRepo>, &RepoPath, &str) -> Vec<Tree>,
++) {
++    let test_repo = TestRepo::init();
++    let path = repo_path(".gitattributes");
++    let contents = "a.txt text\n";
++
++    let trees = Merge::from_vec(
++        tree_builder(&test_repo.repo, path, contents)
++            .into_iter()
++            .map(|tree| tree.id().clone())
++            .collect_vec(),
++    );
++    let tree = MergedTree::new(
++        Arc::clone(test_repo.repo.store()),
++        trees,
++        ConflictLabels::unlabeled(),
++    );
++    let tree_file_loader = TreeFileLoader::new(tree);
++    let mut buf = String::new();
++    tree_file_loader
++        .load(path)
++        .block_on()
++        .unwrap()
++        .expect("The file should exist")
++        .read_to_string(&mut buf)
++        .block_on()
++        .unwrap();
++    assert_eq!(buf, contents);
++}
++
++#[test_case(|repo, path| {
++    let contents = "a.txt text\n";
++    let another_file = repo_path("a.txt");
++    assert_ne!(another_file, path);
++    vec![
++        create_single_tree(repo, &[(another_file, "a\n")]),
++        create_single_tree(repo, &[(path, contents)]),
++        create_single_tree(repo, &[(path, contents)]),
++    ]
++}; "we remove the file")]
++#[test_case(|repo, path| {
++    let contents = "a.txt text\n";
++    let another_file = repo_path("a.txt");
++    assert_ne!(another_file, path);
++    vec![
++        create_single_tree(repo, &[(path, contents)]),
++        create_single_tree(repo, &[(path, contents)]),
++        create_single_tree(repo, &[(another_file, "c\n")]),
++    ]
++}; "they remove the file")]
++#[test_case(|repo, path| {
++    let path = path.join(RepoPathComponent::new("a.txt").unwrap());
++    vec![create_single_tree(repo, &[(&path, "a\n")])]
++}; "subtree")]
++#[test_case(|repo, path| {
++    let another_file = repo_path("a.txt");
++    assert_ne!(path, another_file);
++    let mut tree_builder = TestTreeBuilder::new(Arc::clone(repo.store()));
++    tree_builder.file(another_file, "a.txt text\n");
++    tree_builder.symlink(path, another_file.as_internal_file_string());
++    vec![tree_builder.write_single_tree()]
++}; "symlink")]
++#[test_case(|repo, path| {
++    let mut res = vec![];
++
++    let child_path = path.join(RepoPathComponent::new("a.txt").unwrap());
++    // On our side, we create a subtree at the given path.
++    res.push(create_single_tree(repo, &[(&child_path, "a\n")]));
++
++    // On the base side, nothing exists.
++    res.push(create_single_tree(repo, &[]));
++
++    // On their side, a symlink is created at the given path.
++    let another_file = repo_path("a.txt");
++    assert_ne!(path, another_file);
++    let mut tree_builder = TestTreeBuilder::new(Arc::clone(repo.store()));
++    tree_builder.file(another_file, "a.txt text\n");
++    tree_builder.symlink(path, another_file.as_internal_file_string());
++    res.push(tree_builder.write_single_tree());
++
++    res
++}; "subtree symlink conflict")]
++fn test_gitattr_tree_file_loader_not_a_file(
++    tree_builder: impl FnOnce(&Arc<ReadonlyRepo>, &RepoPath) -> Vec<Tree>,
++) {
++    let test_repo = TestRepo::init();
++    let path = repo_path(".gitattributes");
++
++    let trees = Merge::from_vec(
++        tree_builder(&test_repo.repo, path)
++            .into_iter()
++            .map(|tree| tree.id().clone())
++            .collect_vec(),
++    );
++    let tree = MergedTree::new(
++        Arc::clone(test_repo.repo.store()),
++        trees,
++        ConflictLabels::unlabeled(),
++    );
++    let tree_file_loader = TreeFileLoader::new(tree);
++    assert!(tree_file_loader.load(path).block_on().unwrap().is_none());
++}
++
++#[test_case(|repo, path| {
++    vec![
++        create_single_tree(repo, &[(path, "a.txt text\n")]),
++        create_single_tree(repo, &[]),
++        create_single_tree(repo, &[(path, "b.txt text\n")]),
++    ]
++}; "conflict file change")]
++#[test_case(|repo, path| {
++    let child_path = path.join(RepoPathComponent::new("a.txt").unwrap());
++    vec![
++        create_single_tree(repo, &[(path, "a.txt text\n")]),
++        create_single_tree(repo, &[]),
++        create_single_tree(repo, &[(&child_path, "a\n")]),
++    ]
++}; "file by us subtree by them")]
++#[test_case(|repo, path| {
++    let child_path = path.join(RepoPathComponent::new("a.txt").unwrap());
++    vec![
++        create_single_tree(repo, &[(&child_path, "a\n")]),
++        create_single_tree(repo, &[]),
++        create_single_tree(repo, &[(path, "a.txt text\n")]),
++    ]
++}; "file by them subtree by us")]
++fn test_gitattr_tree_file_loader_conflicts_with_file_term(
++    tree_builder: impl FnOnce(&Arc<ReadonlyRepo>, &RepoPath) -> Vec<Tree>,
++) {
++    let test_repo = TestRepo::init();
++    let path = repo_path(".gitattributes");
++
++    let trees = Merge::from_vec(
++        tree_builder(&test_repo.repo, path)
++            .into_iter()
++            .map(|tree| tree.id().clone())
++            .collect_vec(),
++    );
++    let tree = MergedTree::new(
++        Arc::clone(test_repo.repo.store()),
++        trees,
++        ConflictLabels::unlabeled(),
++    );
++    let tree_file_loader = TreeFileLoader::new(tree);
++    // If one of the conflict side is a file, we should find something.
++    assert!(tree_file_loader.load(path).block_on().unwrap().is_some());
++}
++
++#[test]
++fn test_gitattr_tree_file_loader_debug() {
++    let test_repo = TestRepo::init();
++    let path = repo_path(".gitattributes");
++    let tree = create_tree(&test_repo.repo, &[(path, "a.txt text\n")]);
++    let tree_file_loader = TreeFileLoader::new(tree);
++    drop(format!("{tree_file_loader:?}"));
++}
+Subject: [PATCH] Rebase .gitattributes EOL support onto Jujutsu v0.46.0
+
+Upstream-author: Kaiyi Li <kaiyili@google.com>
+Upstream-commit: https://github.com/jj-vcs/jj/commit/46817e03432803862b2da765d225d7b3f3ee9176
+Upstream-commit: https://github.com/jj-vcs/jj/commit/3cbc012683bbe4d419fa15e50f8614b3352668be
+Upstream-PR: https://github.com/jj-vcs/jj/pull/8266
+Upstream-design: https://github.com/jj-vcs/jj/pull/7164
+Rebased-onto: https://github.com/jj-vcs/jj/releases/tag/v0.46.0
+
+This source patch was generated from the two upstream commits after rebasing
+them onto Jujutsu v0.46.0. Authorship and implementation remain attributed to
+Kaiyi Li and the Jujutsu contributors. The corresponding Cargo.lock update is
+kept in 0002-gitattributes-cargo-lock.patch.
+
+Rebase adaptations:
+- use the gix-attributes 0.36.0 version already present in the v0.46.0 lockfile;
+- retain the PR's asynchronous Tokio cache while reconciling the Watchman
+  feature declaration;
+- initialize the grouped EOL settings at v0.46.0's auxiliary checkout call
+  sites (run.rs, diff_working_copies.rs and the new file/edit.rs).
